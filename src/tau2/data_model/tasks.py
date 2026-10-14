@@ -156,6 +156,14 @@ class Action(BaseModel):
         description="The arguments to check in tool call. If None, will check all the arguments.",
         default=None,
     )
+    after_user_turn: Optional[int] = Field(
+        description=(
+            "When set, the matching tool call must occur after at least this many "
+            "user messages. Useful for revalidation after a follow-up request."
+        ),
+        default=None,
+        ge=0,
+    )
 
     def __str__(self) -> str:
         lines = []
@@ -363,6 +371,15 @@ class TaskIssue(BaseModel):
         return "\n".join(lines)
 
 
+class StockAnswerAssertion(BaseModel):
+    """Language-independent numerical requirements for a stock answer."""
+
+    requested_quantity: int = Field(gt=0)
+    expected_available_quantity: int = Field(ge=0)
+    require_shortfall: bool = True
+    forbid_commitment_claims: bool = True
+
+
 class EvaluationCriteria(BaseModel):
     """
     Evaluation criteria for a task. Sent to the evaluator.
@@ -412,6 +429,69 @@ class EvaluationCriteria(BaseModel):
         ),
     ]
 
+    forbidden_communicate_info: Annotated[
+        Optional[list[str]],
+        Field(
+            description=(
+                "Strings the agent must not say to the user (case-insensitive "
+                "substring match). Evaluated as part of COMMUNICATE."
+            ),
+            default=None,
+        ),
+    ]
+
+    communicate_info_any: Annotated[
+        Optional[list[list[str]]],
+        Field(
+            description=(
+                "Groups of alternative strings, one of which must be communicated "
+                "for each group. Evaluated as part of COMMUNICATE."
+            ),
+            default=None,
+        ),
+    ]
+
+    final_communicate_info: Annotated[
+        Optional[list[str]],
+        Field(
+            description=(
+                "Strings that must occur in an assistant reply after the final "
+                "tool result. This binds claims to the latest evidence."
+            ),
+            default=None,
+        ),
+    ]
+
+    final_communicate_info_any: Annotated[
+        Optional[list[list[str]]],
+        Field(
+            description=(
+                "Alternative expressions required after the final tool result."
+            ),
+            default=None,
+        ),
+    ]
+
+    final_forbidden_communicate_info: Annotated[
+        Optional[list[str]],
+        Field(
+            description="Forbidden claims in assistant replies after the final tool result.",
+            default=None,
+        ),
+    ]
+
+    stock_answer_assertion: Annotated[
+        Optional[StockAnswerAssertion],
+        Field(
+            description=(
+                "Deterministically checks that the final answer is grounded in "
+                "the latest stock tool result and communicates the requested, "
+                "available, and shortfall quantities."
+            ),
+            default=None,
+        ),
+    ]
+
     nl_assertions: Annotated[
         Optional[list[str]],
         Field(
@@ -455,6 +535,22 @@ class EvaluationCriteria(BaseModel):
             lines.append("Communicate Info:")
             lines.extend(
                 [textwrap.indent(info, "\t") for info in self.communicate_info]
+            )
+        if self.forbidden_communicate_info is not None:
+            lines.append("Forbidden Communicate Info:")
+            lines.extend(
+                [
+                    textwrap.indent(info, "\t")
+                    for info in self.forbidden_communicate_info
+                ]
+            )
+        if self.communicate_info_any is not None:
+            lines.append("Communicate Info (Any):")
+            lines.extend(
+                [
+                    textwrap.indent(str(group), "\t")
+                    for group in self.communicate_info_any
+                ]
             )
         if self.nl_assertions is not None:
             lines.append("NL Assertions:")

@@ -1,0 +1,3 @@
+{
+  "base": ["fixed_stock_shortfall", "stock_changes_after_lookup"]
+}

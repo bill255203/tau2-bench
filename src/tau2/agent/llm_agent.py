@@ -28,7 +28,9 @@ In each turn you can either:
 - Make a tool call.
 You cannot do both at the same time.
 
-Try to be helpful and always follow the policy. Always make sure you generate valid JSON only.
+Try to be helpful and always follow the policy. When making a tool call, provide valid
+JSON arguments for that tool. When replying to the user, respond in natural language;
+do not wrap the reply in JSON or invent a tool named `json`.
 """.strip()
 
 SYSTEM_PROMPT = """
@@ -147,7 +149,9 @@ In each turn you can either:
 - Make a tool call.
 You cannot do both at the same time.
 
-Try to be helpful and always follow the policy. Always make sure you generate valid JSON only.
+Try to be helpful and always follow the policy. When making a tool call, provide valid
+JSON arguments for that tool. When replying to the user, respond in natural language;
+do not wrap the reply in JSON or invent a tool named `json`.
 """.strip()
 
 SYSTEM_PROMPT_GT = """

@@ -17,6 +17,7 @@ def _check_actions(
     predicted_tool_calls: list[ToolCall],
     golden_actions: list[Action],
     tool_types: Optional[dict[str, ToolType]] = None,
+    user_turn_counts: Optional[list[int]] = None,
 ) -> list[ActionCheck]:
     """
     Check if all the gold actions are in the predicted tool calls.
@@ -30,11 +31,21 @@ def _check_actions(
         List of ActionCheck results for each golden action.
     """
     action_checks = []
+    unmatched_indexes = set(range(len(predicted_tool_calls)))
     for gold_action in golden_actions:
         found = False
-        for pred_tool_call in predicted_tool_calls:
+        for index, pred_tool_call in enumerate(predicted_tool_calls):
+            if index not in unmatched_indexes:
+                continue
+            if (
+                gold_action.after_user_turn is not None
+                and user_turn_counts is not None
+                and user_turn_counts[index] < gold_action.after_user_turn
+            ):
+                continue
             if gold_action.compare_with_tool_call(pred_tool_call):
                 found = True
+                unmatched_indexes.remove(index)
                 break
         if found:
             gold_action_reward = 1.0
@@ -129,6 +140,26 @@ class ActionEvaluator(EvaluatorBase[Message]):
         return tool_calls
 
     @classmethod
+    def extract_tool_calls_with_user_turn_counts(
+        cls, full_trajectory: list[Message]
+    ) -> tuple[list[ToolCall], list[int]]:
+        """Extract tool calls and the number of preceding user messages."""
+
+        tool_calls: list[ToolCall] = []
+        user_turn_counts: list[int] = []
+        user_turns = 0
+        for message in full_trajectory:
+            if isinstance(message, UserMessage) and not message.is_tool_call():
+                user_turns += 1
+            if (
+                isinstance(message, (AssistantMessage, UserMessage))
+                and message.is_tool_call()
+            ):
+                tool_calls.extend(message.tool_calls)
+                user_turn_counts.extend([user_turns] * len(message.tool_calls))
+        return tool_calls, user_turn_counts
+
+    @classmethod
     def evaluate_actions(
         cls,
         full_trajectory: list[Message],
@@ -146,8 +177,15 @@ class ActionEvaluator(EvaluatorBase[Message]):
         if len(golden_actions) == 0:
             return []
 
-        predicted_tool_calls = cls.extract_tool_calls(full_trajectory)
-        return _check_actions(predicted_tool_calls, golden_actions, tool_types)
+        predicted_tool_calls, user_turn_counts = (
+            cls.extract_tool_calls_with_user_turn_counts(full_trajectory)
+        )
+        return _check_actions(
+            predicted_tool_calls,
+            golden_actions,
+            tool_types,
+            user_turn_counts=user_turn_counts,
+        )
 
 
 class FullDuplexActionEvaluator(EvaluatorBase[Tick]):

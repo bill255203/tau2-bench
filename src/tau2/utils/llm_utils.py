@@ -20,6 +20,7 @@ from loguru import logger
 from tau2.config import (
     DEFAULT_LLM_CACHE_TYPE,
     DEFAULT_MAX_RETRIES,
+    DEFAULT_OLLAMA_NUM_CTX,
     LLM_CACHE_ENABLED,
     REDIS_CACHE_TTL,
     REDIS_CACHE_VERSION,
@@ -116,7 +117,7 @@ def _parse_ft_model_name(model: str) -> str:
         return model
 
 
-def get_response_cost(response: ModelResponse) -> float:
+def get_response_cost(response: ModelResponse) -> float | None:
     """
     Get the cost of the response from the litellm completion.
     """
@@ -127,7 +128,7 @@ def get_response_cost(response: ModelResponse) -> float:
         cost = completion_cost(completion_response=response)
     except Exception as e:
         logger.error(e)
-        return 0.0
+        return None
     return cost
 
 
@@ -378,6 +379,11 @@ def generate(
     validate_message_history(messages)
     if kwargs.get("num_retries") is None:
         kwargs["num_retries"] = DEFAULT_MAX_RETRIES
+    if model.startswith(("ollama/", "ollama_chat/")):
+        # Ollama's runtime default is 4096 even when the model supports a much
+        # larger context. That silently truncates long policies/tool schemas
+        # and can make an agent believe that required tools do not exist.
+        kwargs.setdefault("num_ctx", DEFAULT_OLLAMA_NUM_CTX)
 
     # Vertex AI Gemini 3 models require VERTEXAI_LOCATION="global"
     if model.startswith("vertex_ai/gemini-3") and not os.environ.get(

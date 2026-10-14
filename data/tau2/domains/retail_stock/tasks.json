@@ -1,0 +1,101 @@
+[
+  {
+    "id": "fixed_stock_shortfall",
+    "description": {
+      "purpose": "Verify fixed stock lookup and quantity comparison without reservation or ordering.",
+      "relevant_policies": "Use get_variant_stock; report availability and shortfall; do not claim reservation or ordering.",
+      "notes": "The reference answer is evaluator-only and is not included in the user scenario or agent policy."
+    },
+    "user_scenario": {
+      "persona": null,
+      "instructions": {
+        "domain": "retail_stock",
+        "reason_for_call": "Ask whether the store can supply 10 units of the blue, size M, cotton, crew-neck T-Shirt (product 9523456873, item 9612497925).",
+        "known_info": "You need exactly 10 units of that variant.",
+        "unknown_info": "You do not know the current stock level.",
+        "task_instructions": "Ask only about availability. Do not ask the agent to reserve inventory or place an order. End after receiving a clear answer."
+      }
+    },
+    "initial_state": null,
+    "evaluation_criteria": {
+      "actions": [
+        {
+          "action_id": "fixed_stock_shortfall_0",
+          "requestor": "assistant",
+          "name": "get_variant_stock",
+          "arguments": {
+            "product_id": "9523456873",
+            "item_id": "9612497925"
+          }
+        }
+      ],
+      "communicate_info": ["8", "2"],
+      "communicate_info_any": [
+        [
+          "not enough",
+          "insufficient",
+          "cannot supply",
+          "can't supply",
+          "only have"
+        ]
+      ],
+      "forbidden_communicate_info": [
+        "reserved",
+        "reservation confirmed",
+        "set aside",
+        "order placed",
+        "order has been placed"
+      ],
+      "reward_basis": ["ACTION", "COMMUNICATE"]
+    }
+  },
+  {
+    "id": "stock_changes_after_lookup",
+    "description": {
+      "purpose": "Verify that the agent revalidates volatile inventory before confirming supply.",
+      "relevant_policies": "Stock checks are snapshots, not reservations; confirmations require fresh evidence.",
+      "notes": "After the first lookup, a deterministic background purchase removes 6 units. The event timing and answer are evaluator-only."
+    },
+    "user_scenario": {
+      "persona": null,
+      "instructions": {
+        "domain": "retail_stock",
+        "reason_for_call": "You need exactly 5 units of the blue, size M, cotton, crew-neck T-Shirt (product 9523456873, item 9612497925). First ask how many are available. After the agent answers, ask them to confirm whether they can supply all 5 units now.",
+        "known_info": "You need 5 identical units. Inventory checks may become stale and do not reserve anything.",
+        "unknown_info": "You do not know the stock count, when it may change, or the correct final answer.",
+        "task_instructions": "Follow both stages even if the first answer seems clear. Do not ask for a reservation or order. End after the agent clearly answers whether it can or cannot supply all 5. A clear negative answer completes the task normally."
+      }
+    },
+    "initial_state": null,
+    "evaluation_criteria": {
+      "actions": [
+        {
+          "action_id": "stock_changes_initial_lookup",
+          "requestor": "assistant",
+          "name": "get_variant_stock",
+          "arguments": {
+            "product_id": "9523456873",
+            "item_id": "9612497925"
+          }
+        },
+        {
+          "action_id": "stock_changes_revalidation",
+          "requestor": "assistant",
+          "name": "get_variant_stock",
+          "arguments": {
+            "product_id": "9523456873",
+            "item_id": "9612497925"
+          },
+          "after_user_turn": 2
+        }
+      ],
+      "stock_answer_assertion": {
+        "requested_quantity": 5,
+        "expected_available_quantity": 2,
+        "require_shortfall": true,
+        "forbid_commitment_claims": true
+      },
+      "reward_basis": ["ACTION", "COMMUNICATE"]
+    }
+  }
+]

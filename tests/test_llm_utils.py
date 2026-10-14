@@ -11,6 +11,36 @@ from tau2.environment.tool import Tool, as_tool
 from tau2.utils.llm_utils import generate
 
 
+def test_generate_sets_large_ollama_context(monkeypatch, messages):
+    captured_kwargs = {}
+
+    def fake_completion(**kwargs):
+        captured_kwargs.update(kwargs)
+        raise RuntimeError("stop after capturing request")
+
+    monkeypatch.setattr("tau2.utils.llm_utils.completion", fake_completion)
+
+    with pytest.raises(RuntimeError, match="stop after capturing request"):
+        generate("ollama_chat/qwen3.5:latest", messages)
+
+    assert captured_kwargs["num_ctx"] == 8192
+
+
+def test_generate_preserves_explicit_ollama_context(monkeypatch, messages):
+    captured_kwargs = {}
+
+    def fake_completion(**kwargs):
+        captured_kwargs.update(kwargs)
+        raise RuntimeError("stop after capturing request")
+
+    monkeypatch.setattr("tau2.utils.llm_utils.completion", fake_completion)
+
+    with pytest.raises(RuntimeError, match="stop after capturing request"):
+        generate("ollama/qwen3:4b", messages, num_ctx=16384)
+
+    assert captured_kwargs["num_ctx"] == 16384
+
+
 @pytest.fixture
 def model() -> str:
     return "gpt-4o-mini"

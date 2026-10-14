@@ -38,6 +38,9 @@ DEFAULT_LLM_LOG_MODE = "latest"  # Options: "all", "latest"
 # LLM INFRASTRUCTURE (fixed operational constants)
 # =============================================================================
 DEFAULT_MAX_RETRIES = 3
+# Ollama otherwise defaults to a 4K context window, which is too small for
+# domain policies plus tool schemas in domains such as retail.
+DEFAULT_OLLAMA_NUM_CTX = 8192
 DEFAULT_RETRY_ATTEMPTS = 3
 DEFAULT_RETRY_MIN_WAIT = 1.0  # seconds
 DEFAULT_RETRY_MAX_WAIT = 10.0  # seconds

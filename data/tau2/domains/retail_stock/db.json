@@ -1,0 +1,24 @@
+{
+  "products": {
+    "9523456873": {
+      "name": "T-Shirt",
+      "product_id": "9523456873",
+      "variants": {
+        "9612497925": {
+          "item_id": "9612497925",
+          "options": {
+            "color": "blue",
+            "size": "M",
+            "material": "cotton",
+            "style": "crew neck"
+          },
+          "available": true,
+          "price": 19.99,
+          "stock_quantity": 8
+        }
+      }
+    }
+  },
+  "users": {},
+  "orders": {}
+}
