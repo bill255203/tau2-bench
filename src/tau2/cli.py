@@ -8,10 +8,10 @@ from tau2.config import (
     DEFAULT_INTEGRATION_DURATION_SECONDS,
     DEFAULT_INTERRUPTION_CHECK_INTERVAL_SECONDS,
     DEFAULT_LLM_AGENT,
+    DEFAULT_LLM_ARGS_AGENT,
+    DEFAULT_LLM_ARGS_USER,
     DEFAULT_LLM_EVAL_USER_SIMULATOR,
     DEFAULT_LLM_LOG_MODE,
-    DEFAULT_LLM_TEMPERATURE_AGENT,
-    DEFAULT_LLM_TEMPERATURE_USER,
     DEFAULT_LLM_USER,
     DEFAULT_LOG_LEVEL,
     DEFAULT_MAX_CONCURRENCY,
@@ -80,8 +80,8 @@ def add_run_args(parser):
     parser.add_argument(
         "--agent-llm-args",
         type=json.loads,
-        default={"temperature": DEFAULT_LLM_TEMPERATURE_AGENT},
-        help=f"The arguments to pass to the LLM for the agent. Default is '{{\"temperature\": {DEFAULT_LLM_TEMPERATURE_AGENT}}}'.",
+        default=DEFAULT_LLM_ARGS_AGENT,
+        help=f"The arguments to pass to the LLM for the agent. Default is {DEFAULT_LLM_ARGS_AGENT}.",
     )
     parser.add_argument(
         "--user",
@@ -99,8 +99,8 @@ def add_run_args(parser):
     parser.add_argument(
         "--user-llm-args",
         type=json.loads,
-        default={"temperature": DEFAULT_LLM_TEMPERATURE_USER},
-        help=f"The arguments to pass to the LLM for the user. Default is '{{\"temperature\": {DEFAULT_LLM_TEMPERATURE_USER}}}'.",
+        default=DEFAULT_LLM_ARGS_USER,
+        help=f"The arguments to pass to the LLM for the user. Default is {DEFAULT_LLM_ARGS_USER}.",
     )
     parser.add_argument(
         "--task-set-name",
@@ -235,6 +235,18 @@ def add_run_args(parser):
         action="store_true",
         default=False,
         help="Enforce communication protocol rules (e.g., no mixed messages with text and tool calls). Default is False.",
+    )
+    parser.add_argument(
+        "--verifier-model",
+        type=str,
+        default=None,
+        help="Verify every text-agent output before commit using this LLM model.",
+    )
+    parser.add_argument(
+        "--verifier-llm-args",
+        type=json.loads,
+        default={},
+        help="JSON arguments passed to the online verifier LLM.",
     )
     parser.add_argument(
         "--user-persona",
@@ -714,6 +726,8 @@ def main():
                 user=args.user,
                 max_steps=args.max_steps,
                 enforce_communication_protocol=args.enforce_communication_protocol,
+                verifier_model=args.verifier_model,
+                verifier_llm_args=args.verifier_llm_args,
             )
 
         return run_domain(config)

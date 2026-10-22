@@ -1,0 +1,6 @@
+{
+  "status": "failed",
+  "reason": "infrastructure_error",
+  "error": "litellm.APIConnectionError: Ollama_chatException - [Errno 61] Connection refused",
+  "error_type": "APIConnectionError"
+}

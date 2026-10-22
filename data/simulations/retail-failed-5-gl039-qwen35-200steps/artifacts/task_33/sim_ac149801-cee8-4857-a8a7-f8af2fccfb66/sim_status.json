@@ -1,0 +1,6 @@
+{
+  "status": "failed",
+  "reason": "infrastructure_error",
+  "error": "UserMessage must have either content or tool_calls. Got UserMessage\nis_final_chunk: True",
+  "error_type": "ValueError"
+}

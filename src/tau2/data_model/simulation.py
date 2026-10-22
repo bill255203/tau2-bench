@@ -587,6 +587,20 @@ class TextRunConfig(BaseRunConfig):
             default_factory=lambda: deepcopy(DEFAULT_LLM_ARGS_AGENT),
         ),
     ]
+    verifier_model: Annotated[
+        Optional[str],
+        Field(
+            description="Optional LLM model used to verify every agent output before commit.",
+            default=None,
+        ),
+    ]
+    verifier_llm_args: Annotated[
+        dict,
+        Field(
+            description="Arguments passed to the online verifier LLM.",
+            default_factory=dict,
+        ),
+    ]
 
     # ---- User ----
     user: Annotated[
@@ -1289,6 +1303,7 @@ class TerminationReason(str, Enum):
     INFRASTRUCTURE_ERROR = "infrastructure_error"  # Task failed due to infrastructure (e.g., API disconnect)
     CONTEXT_WINDOW_EXCEEDED = "context_window_exceeded"
     UNEXPECTED_ERROR = "unexpected_error"
+    VERIFIER_REJECTED = "verifier_rejected"
 
 
 class SimulationRun(BaseModel):

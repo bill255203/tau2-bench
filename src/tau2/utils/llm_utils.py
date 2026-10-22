@@ -20,6 +20,7 @@ from loguru import logger
 from tau2.config import (
     DEFAULT_LLM_CACHE_TYPE,
     DEFAULT_MAX_RETRIES,
+    DEFAULT_OLLAMA_BASE_URL,
     DEFAULT_OLLAMA_NUM_CTX,
     LLM_CACHE_ENABLED,
     REDIS_CACHE_TTL,
@@ -384,6 +385,7 @@ def generate(
         # larger context. That silently truncates long policies/tool schemas
         # and can make an agent believe that required tools do not exist.
         kwargs.setdefault("num_ctx", DEFAULT_OLLAMA_NUM_CTX)
+        kwargs.setdefault("api_base", DEFAULT_OLLAMA_BASE_URL)
 
     # Vertex AI Gemini 3 models require VERTEXAI_LOCATION="global"
     if model.startswith("vertex_ai/gemini-3") and not os.environ.get(

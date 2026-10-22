@@ -1,0 +1,167 @@
+{
+  "call_id": "8087ed57",
+  "call_name": "user_simulator_response",
+  "timestamp": "2026-10-21T10:49:58.719176",
+  "request": {
+    "model": "ollama_chat/qwen3.5:latest",
+    "messages": [
+      {
+        "role": "system",
+        "content": [
+          "# User Simulation Guidelines",
+          "You are playing the role of a customer contacting a customer service representative. ",
+          "Your goal is to simulate realistic customer interactions while following specific scenario instructions.",
+          "",
+          "## Core Principles",
+          "- Generate one message at a time, maintaining natural conversation flow.",
+          "- Strictly follow the scenario instructions you have received.",
+          "- Never make up or hallucinate information not provided in the scenario instructions. Information that is not provided in the scenario instructions should be considered unknown or unavailable.",
+          "- Avoid repeating the exact instructions verbatim. Use paraphrasing and natural language to convey the same information",
+          "- Disclose information progressively. Wait for the agent to ask for specific information before providing it.",
+          "",
+          "## Task Completion",
+          "- The goal is to continue the conversation until the task is complete.",
+          "- If the instruction goal is satisified, generate the '###STOP###' token to end the conversation.",
+          "- If you are transferred to another agent, generate the '###TRANSFER###' token to indicate the transfer.",
+          "- If you find yourself in a situation in which the scenario does not provide enough information for you to continue the conversation, generate the '###OUT-OF-SCOPE###' token to end the conversation.",
+          "Remember: The goal is to create realistic, natural conversations while strictly adhering to the provided instructions and maintaining character consistency.",
+          "",
+          "",
+          "<scenario>",
+          "Instructions:",
+          "\tDomain: retail",
+          "\tReason for call:",
+          "\t\tYou want to modify your laptop order to your NYC address (you don't want to reveal it yourself but the address should be in your orders profile). You also want to modify the laptop to item number 9844888101. You also want to change your watch for one with black dial color but keeping the leather strap.",
+          "\tKnown info:",
+          "\t\tYou name is Yara Silva and your zip code is 77159.",
+          "\tUnknown info:",
+          "\t\tYou do not remember your email address",
+          "\tTask instructions:",
+          "\t\tYou are sad and cautious. You like to say things piecewise.",
+          "</scenario>"
+        ]
+      },
+      {
+        "role": "user",
+        "content": "Hi! How can I help you today?"
+      },
+      {
+        "role": "assistant",
+        "content": "Hi... it's Yara Silva. I'm calling about an order I placed. I'm feeling a bit down today, so I hope you can help me out.",
+        "tool_calls": null
+      },
+      {
+        "role": "user",
+        "content": [
+          "Hello Yara! I'd be happy to help you with your order today. To get started, I need to authenticate your identity first. ",
+          "",
+          "Could you please provide me with your email address associated with your account?"
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": "Well... I'm afraid I don't remember my email address. It's been a while since I've checked it. Is there another way we can verify my identity?",
+        "tool_calls": null
+      },
+      {
+        "role": "user",
+        "content": [
+          "No problem! We can verify your identity using your name and zip code instead. I already have your first name as Yara and last name as Silva from what you've told me. ",
+          "",
+          "Could you please provide me with your zip code so I can locate your account?"
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": "My zip code is 77159. Is that correct?",
+        "tool_calls": null
+      },
+      {
+        "role": "user",
+        "content": [
+          "Perfect! I can see your user details. You have four orders: #W9810810, #W9034102, #W3964602, and #W3730488. ",
+          "",
+          "You also have a gift card (gift_card_7252880) with a balance of $56.00.",
+          "",
+          "Could you please tell me which order you'd like to get help with? Or if you don't remember the order ID, I can check the details of each order to help you identify it."
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": "Oh... that's a lot of orders. I'm not sure which one has the laptop and watch I want to change. Could you check the details for each order? I think it might be one of them, but I don't remember exactly which one.",
+        "tool_calls": null
+      },
+      {
+        "role": "user",
+        "content": [
+          "I see order #W3964602 is delivered and contains cycling helmets, dumbbell sets, vacuum cleaners, and a Bluetooth speaker. No laptop or watch here.",
+          "",
+          "Let me check the last order #W3730488."
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": "Okay... go ahead and check that one. I'm not sure which order has what I need, so just let me know what's in it.",
+        "tool_calls": null
+      },
+      {
+        "role": "user",
+        "content": [
+          "Perfect! Now I have all your order details. Here's a summary of each order:",
+          "",
+          "**Order #W9810810** (Status: pending):",
+          "- Electric Kettle ($149.45)",
+          "- Wristwatch ($1,985.30) - leather strap, white dial",
+          "- Bookshelf ($473.48)",
+          "",
+          "**Order #W9034102** (Status: pending):",
+          "- Air Purifier ($523.31)",
+          "- Backpack ($200.48)",
+          "- Water Bottle ($52.79)",
+          "- Tablet ($1,018.68)",
+          "",
+          "**Order #W3964602** (Status: delivered):",
+          "- Cycling Helmet (blue, L size)",
+          "- Dumbbell Set",
+          "- Vacuum Cleaner",
+          "- Cycling Helmet (black, S size)",
+          "- Bluetooth Speaker",
+          "",
+          "**Order #W3730488** (Status: pending):",
+          "- Espresso Machine ($2,955.17)",
+          "- Laptop ($2,701.89) - 15-inch screen, i9 processor, 32GB RAM, 512GB SSD, black",
+          "",
+          "I can see you have a **Wristwatch** in order #W9810810 and a **Laptop** in order #W3730488. ",
+          "",
+          "Could you please tell me what changes you'd like to make to these items? For example:",
+          "- Do you want to modify the options (like color, size, etc.) of the watch and laptop?",
+          "- Or do you want to cancel one or both orders?",
+          "",
+          "Also, please note that for pending orders, we can only modify items once per order, so I'll need to make sure we get all the details correct before proceeding."
+        ]
+      }
+    ],
+    "tools": null,
+    "tool_choice": null,
+    "kwargs": {
+      "api_base": "http://127.0.0.1:11435",
+      "temperature": 0,
+      "num_ctx": 16384,
+      "max_tokens": 2048,
+      "seed": 626729,
+      "num_retries": 3
+    },
+    "timestamp": "2026-10-21T10:49:14.681686"
+  },
+  "response": {
+    "timestamp": "2026-10-21T10:49:58.717203",
+    "content": "",
+    "tool_calls": null,
+    "cost": 0.0,
+    "usage": {
+      "completion_tokens": 2048,
+      "prompt_tokens": 1345
+    },
+    "generation_time_seconds": 44.035123125009704
+  }
+}

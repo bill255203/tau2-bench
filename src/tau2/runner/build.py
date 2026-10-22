@@ -32,6 +32,7 @@ from tau2.user.user_simulator_base import FullDuplexUser, HalfDuplexUser
 from tau2.user_simulation_voice_presets import (
     get_or_load_task_voice_config,
 )
+from tau2.verifier.llm_verifier import LLMVerifier
 
 # =============================================================================
 # Low-level build functions (no RunConfig needed)
@@ -412,6 +413,15 @@ def build_text_orchestrator(
         solo_mode=solo_mode,
     )
 
+    verifier = (
+        LLMVerifier(
+            llm=config.verifier_model,
+            llm_args=config.verifier_llm_args,
+        )
+        if config.verifier_model is not None
+        else None
+    )
+
     orchestrator = Orchestrator(
         domain=domain,
         agent=agent,
@@ -425,6 +435,7 @@ def build_text_orchestrator(
         simulation_id=simulation_id,
         validate_communication=config.enforce_communication_protocol,
         timeout=config.timeout,
+        verifier=verifier,
     )
 
     logger.debug(

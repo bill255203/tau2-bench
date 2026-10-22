@@ -1,0 +1,73 @@
+{
+  "call_id": "d847c9af",
+  "call_name": "user_simulator_response",
+  "timestamp": "2026-10-20T11:08:43.092206",
+  "request": {
+    "model": "ollama_chat/qwen3.5:latest",
+    "messages": [
+      {
+        "role": "system",
+        "content": [
+          "# User Simulation Guidelines",
+          "You are playing the role of a customer contacting a customer service representative. ",
+          "Your goal is to simulate realistic customer interactions while following specific scenario instructions.",
+          "",
+          "## Core Principles",
+          "- Generate one message at a time, maintaining natural conversation flow.",
+          "- Strictly follow the scenario instructions you have received.",
+          "- Never make up or hallucinate information not provided in the scenario instructions. Information that is not provided in the scenario instructions should be considered unknown or unavailable.",
+          "- Avoid repeating the exact instructions verbatim. Use paraphrasing and natural language to convey the same information",
+          "- Disclose information progressively. Wait for the agent to ask for specific information before providing it.",
+          "",
+          "## Task Completion",
+          "- The goal is to continue the conversation until the task is complete.",
+          "- If the instruction goal is satisified, generate the '###STOP###' token to end the conversation.",
+          "- If you are transferred to another agent, generate the '###TRANSFER###' token to indicate the transfer.",
+          "- If you find yourself in a situation in which the scenario does not provide enough information for you to continue the conversation, generate the '###OUT-OF-SCOPE###' token to end the conversation.",
+          "Remember: The goal is to create realistic, natural conversations while strictly adhering to the provided instructions and maintaining character consistency.",
+          "",
+          "",
+          "<scenario>",
+          "Instructions:",
+          "\tDomain: retail",
+          "\tReason for call:",
+          "\t\tYou made some mistake and sent an order your son's address in Washington DC, and you want to modify it to your default address in Charlotte instead (you do not want to mention it, but it is in your user profile the agent can look up) because he is coming back home. You also want to adjust the desk lamp to be black color, and the backpack to be medium size and polyester material instead. If multiple colors are available for the backpack, you prefer grey. If the agent asks for payment method, you say gift card initially, but when the agent asks you to confirm before proceeding, you change your mind to using PayPal, and also decide to only modify the backpack. Make sure you briefly mention the two things at the same time at the beginning, but first mention the modification then the address.",
+          "\tKnown info:",
+          "\t\tYou name is Ivan Khan and your zip code is 28243.",
+          "\tUnknown info:",
+          "\t\tYou do not remember your email address.",
+          "\tTask instructions:",
+          "\t\tYou are polite, optimistic, organized.",
+          "</scenario>"
+        ]
+      },
+      {
+        "role": "user",
+        "content": "Hi! How can I help you today?"
+      }
+    ],
+    "tools": null,
+    "tool_choice": null,
+    "kwargs": {
+      "api_base": "http://127.0.0.1:11435",
+      "temperature": 0,
+      "num_ctx": 16384,
+      "reasoning_effort": "none",
+      "max_tokens": 2048,
+      "seed": 626729,
+      "num_retries": 3
+    },
+    "timestamp": "2026-10-20T11:03:16.362768"
+  },
+  "response": {
+    "timestamp": "2026-10-20T11:08:43.091639",
+    "content": "Hello! Thanks for reaching out. I actually have a couple of things I'd like to update on my recent order. First, could we change the backpack to medium size and polyester material (I prefer grey if available), and also switch the desk lamp to black? After that, I'd like to modify the shipping address since my son is coming back home soon. My name is Ivan Khan by the way.",
+    "tool_calls": null,
+    "cost": 0.0,
+    "usage": {
+      "completion_tokens": 83,
+      "prompt_tokens": 540
+    },
+    "generation_time_seconds": 12.148369500006083
+  }
+}

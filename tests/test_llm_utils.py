@@ -24,6 +24,7 @@ def test_generate_sets_large_ollama_context(monkeypatch, messages):
         generate("ollama_chat/qwen3.5:latest", messages)
 
     assert captured_kwargs["num_ctx"] == 8192
+    assert captured_kwargs["api_base"] == "http://127.0.0.1:11435"
 
 
 def test_generate_preserves_explicit_ollama_context(monkeypatch, messages):
@@ -36,9 +37,15 @@ def test_generate_preserves_explicit_ollama_context(monkeypatch, messages):
     monkeypatch.setattr("tau2.utils.llm_utils.completion", fake_completion)
 
     with pytest.raises(RuntimeError, match="stop after capturing request"):
-        generate("ollama/qwen3:4b", messages, num_ctx=16384)
+        generate(
+            "ollama/qwen3:4b",
+            messages,
+            num_ctx=16384,
+            api_base="http://127.0.0.1:9999",
+        )
 
     assert captured_kwargs["num_ctx"] == 16384
+    assert captured_kwargs["api_base"] == "http://127.0.0.1:9999"
 
 
 @pytest.fixture

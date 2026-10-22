@@ -1,0 +1,6 @@
+{
+  "status": "failed",
+  "reason": "infrastructure_error",
+  "error": "litellm.APIConnectionError: Ollama_chatException - [Errno 54] Connection reset by peer",
+  "error_type": "APIConnectionError"
+}

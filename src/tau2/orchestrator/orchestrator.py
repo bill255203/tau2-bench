@@ -36,6 +36,8 @@ from tau2.user.user_simulator_base import (
 )
 from tau2.utils.llm_utils import get_cost
 from tau2.utils.utils import format_time, get_now
+from tau2.verifier.base import Verifier
+from tau2.verifier.models import VerifierDecision, VerifierRecord
 
 
 class Role(str, Enum):
@@ -405,6 +407,7 @@ class Orchestrator(BaseOrchestrator[AgentT, UserT, Message]):
         simulation_id: Optional[str] = None,
         validate_communication: bool = False,
         timeout: Optional[float] = None,
+        verifier: Optional[Verifier] = None,
     ):
         """
         Initialize the Orchestrator for managing simulation between Agent, User, and Environment.
@@ -428,6 +431,7 @@ class Orchestrator(BaseOrchestrator[AgentT, UserT, Message]):
             validate_communication: If True, validates communication protocol rules (e.g., no mixed
                                    messages with both text and tool calls). Defaults to False.
             timeout: Maximum wallclock time in seconds. None means no timeout.
+            verifier: Optional online verifier for transactional agent outputs.
         """
         # Initialize base class
         super().__init__(
@@ -448,6 +452,8 @@ class Orchestrator(BaseOrchestrator[AgentT, UserT, Message]):
         self.trajectory: list[Message] = []
         self.solo_mode = solo_mode
         self.validate_communication = validate_communication
+        self.verifier = verifier
+        self.verifier_records: list[VerifierRecord] = []
 
         # Turn-based routing state
         self.from_role: Optional[Role] = None
@@ -813,6 +819,19 @@ class Orchestrator(BaseOrchestrator[AgentT, UserT, Message]):
             seed=self.seed,
             mode=self.mode.value,
             speech_environment=speech_environment,
+            info=(
+                {
+                    "verifier": {
+                        "enabled": True,
+                        "records": [
+                            record.model_dump(mode="json")
+                            for record in self.verifier_records
+                        ],
+                    }
+                }
+                if self.verifier is not None
+                else None
+            ),
         )
         return simulation_run
 
@@ -855,9 +874,36 @@ class Orchestrator(BaseOrchestrator[AgentT, UserT, Message]):
         elif (
             self.from_role == Role.USER or self.from_role == Role.ENV
         ) and self.to_role == Role.AGENT:
-            agent_msg, self.agent_state = self.agent.generate_next_message(
-                self.message, self.agent_state
-            )
+            if self.verifier is None:
+                agent_msg, self.agent_state = self.agent.generate_next_message(
+                    self.message, self.agent_state
+                )
+            else:
+                state_before = deepcopy(self.agent_state)
+                agent_msg, proposed_state = self.agent.generate_next_message(
+                    self.message, deepcopy(state_before)
+                )
+                verdict = self.verifier.verify(
+                    policy=self.environment.get_policy(),
+                    task=self.task,
+                    history=deepcopy(self.trajectory),
+                    proposed_message=deepcopy(agent_msg),
+                )
+                self.verifier_records.append(
+                    VerifierRecord(
+                        proposal_index=len(self.verifier_records),
+                        history_length=len(self.trajectory),
+                        proposed_message=agent_msg.model_dump(mode="json"),
+                        verdict=verdict,
+                    )
+                )
+                if verdict.decision != VerifierDecision.PASS:
+                    self.agent_state = state_before
+                    self.done = True
+                    self.termination_reason = TerminationReason.VERIFIER_REJECTED
+                    self.step_count += 1
+                    return
+                self.agent_state = proposed_state
             agent_msg.validate()
             if self.agent.is_stop(agent_msg):
                 self.done = True

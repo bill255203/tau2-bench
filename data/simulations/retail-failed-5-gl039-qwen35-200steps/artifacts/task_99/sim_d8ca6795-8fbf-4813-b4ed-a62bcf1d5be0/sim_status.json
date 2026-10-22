@@ -1,0 +1,6 @@
+{
+  "status": "failed",
+  "reason": "infrastructure_error",
+  "error": "AssistantMessage must have either content or tool_calls. Got AssistantMessage\nis_final_chunk: True",
+  "error_type": "ValueError"
+}
