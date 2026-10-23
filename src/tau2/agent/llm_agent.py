@@ -42,6 +42,17 @@ SYSTEM_PROMPT = """
 </policy>
 """.strip()
 
+VERIFIER_REVISION_PROMPT = """
+Your immediately preceding proposed response was not committed or shown to the
+customer. Revise it using the verifier feedback below. Generate a complete
+replacement response or tool call that follows the policy and is grounded in
+the existing conversation and tool results. Do not mention the verifier,
+feedback, rejection, or an internal revision process to the customer.
+
+Verifier feedback:
+{feedback}
+""".strip()
+
 
 class LLMAgentState(BaseModel):
     """The state of the agent."""
@@ -113,6 +124,28 @@ class LLMAgent(
         assistant_message = self._generate_next_message(message, state)
         state.messages.append(assistant_message)
         return assistant_message, state
+
+    def generate_next_message_with_verifier_feedback(
+        self,
+        message: ValidAgentInputMessage,
+        state: LLMAgentStateType,
+        feedback: str,
+    ) -> tuple[AssistantMessage, LLMAgentStateType]:
+        """Generate a replacement without persisting verifier feedback in history.
+
+        The feedback is an agent-only, transient system instruction. The returned
+        state contains the real inbound message and replacement response, but not
+        the rejected proposal or the verifier feedback.
+        """
+        feedback_message = SystemMessage(
+            role="system",
+            content=VERIFIER_REVISION_PROMPT.format(feedback=feedback),
+        )
+        state.system_messages.append(feedback_message)
+        try:
+            return self.generate_next_message(message, state)
+        finally:
+            state.system_messages.pop()
 
     def _generate_next_message(
         self, message: ValidAgentInputMessage, state: LLMAgentStateType

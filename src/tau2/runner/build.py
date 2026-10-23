@@ -436,6 +436,7 @@ def build_text_orchestrator(
         validate_communication=config.enforce_communication_protocol,
         timeout=config.timeout,
         verifier=verifier,
+        verifier_max_revisions=config.verifier_max_revisions,
     )
 
     logger.debug(

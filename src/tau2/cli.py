@@ -249,6 +249,12 @@ def add_run_args(parser):
         help="JSON arguments passed to the online verifier LLM.",
     )
     parser.add_argument(
+        "--verifier-max-revisions",
+        type=int,
+        default=1,
+        help="Maximum verifier-directed replacement proposals per agent turn. Default is 1.",
+    )
+    parser.add_argument(
         "--user-persona",
         type=json.loads,
         default=None,
@@ -728,6 +734,7 @@ def main():
                 enforce_communication_protocol=args.enforce_communication_protocol,
                 verifier_model=args.verifier_model,
                 verifier_llm_args=args.verifier_llm_args,
+                verifier_max_revisions=args.verifier_max_revisions,
             )
 
         return run_domain(config)

@@ -30,3 +30,4 @@ class VerifierRecord(BaseModel):
     history_length: int
     proposed_message: dict
     verdict: VerifierVerdict
+    revision_attempt: int = 0

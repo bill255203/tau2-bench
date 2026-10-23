@@ -5,7 +5,9 @@ import json
 from tau2.data_model.message import (
     AssistantMessage,
     Message,
+    MultiToolMessage,
     SystemMessage,
+    ToolMessage,
     UserMessage,
 )
 from tau2.data_model.tasks import Task
@@ -34,6 +36,51 @@ Return only JSON with this shape:
 """.strip()
 
 
+def _compact_tool_message(message: ToolMessage) -> dict:
+    """Serialize a tool result using only information relevant to verification."""
+    return {
+        "id": message.id,
+        "role": message.role,
+        "content": message.content,
+        "requestor": message.requestor,
+        "error": message.error,
+    }
+
+
+def _compact_message(message: Message) -> dict:
+    """Create a public, policy-relevant representation of a history message.
+
+    Full Pydantic message dumps contain provider responses, token accounting,
+    timestamps, audio metadata, and potentially very long private reasoning
+    traces in ``raw_data``. None of those fields are evidence the verifier
+    needs to decide whether a proposed action is safe to commit.
+    """
+    if isinstance(message, MultiToolMessage):
+        return {
+            "role": message.role,
+            "tool_messages": [
+                _compact_tool_message(tool_message)
+                for tool_message in message.tool_messages
+            ],
+        }
+    if isinstance(message, ToolMessage):
+        return _compact_tool_message(message)
+
+    compact_message = {"role": message.role, "content": message.content}
+    if isinstance(message, (AssistantMessage, UserMessage)):
+        if message.tool_calls:
+            compact_message["tool_calls"] = [
+                {
+                    "id": tool_call.id,
+                    "name": tool_call.name,
+                    "arguments": tool_call.arguments,
+                    "requestor": tool_call.requestor,
+                }
+                for tool_call in message.tool_calls
+            ]
+    return compact_message
+
+
 class LLMVerifier(Verifier):
     """Use a separate LLM call to gate each proposed agent output."""
 
@@ -53,10 +100,8 @@ class LLMVerifier(Verifier):
         payload = {
             "policy": policy,
             "task": task.model_dump(mode="json"),
-            "committed_history": [
-                message.model_dump(mode="json") for message in history
-            ],
-            "proposed_agent_output": proposed_message.model_dump(mode="json"),
+            "committed_history": [_compact_message(message) for message in history],
+            "proposed_agent_output": _compact_message(proposed_message),
         }
         response = generate(
             model=self.llm,

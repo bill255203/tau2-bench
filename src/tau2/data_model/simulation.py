@@ -601,6 +601,14 @@ class TextRunConfig(BaseRunConfig):
             default_factory=dict,
         ),
     ]
+    verifier_max_revisions: Annotated[
+        int,
+        Field(
+            description="Maximum verifier-directed replacement proposals per agent turn.",
+            default=1,
+            ge=0,
+        ),
+    ]
 
     # ---- User ----
     user: Annotated[

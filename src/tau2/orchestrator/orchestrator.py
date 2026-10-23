@@ -408,6 +408,7 @@ class Orchestrator(BaseOrchestrator[AgentT, UserT, Message]):
         validate_communication: bool = False,
         timeout: Optional[float] = None,
         verifier: Optional[Verifier] = None,
+        verifier_max_revisions: int = 1,
     ):
         """
         Initialize the Orchestrator for managing simulation between Agent, User, and Environment.
@@ -432,6 +433,8 @@ class Orchestrator(BaseOrchestrator[AgentT, UserT, Message]):
                                    messages with both text and tool calls). Defaults to False.
             timeout: Maximum wallclock time in seconds. None means no timeout.
             verifier: Optional online verifier for transactional agent outputs.
+            verifier_max_revisions: Maximum verifier-directed replacement proposals
+                before rejecting an agent turn. Only used when verifier is set.
         """
         # Initialize base class
         super().__init__(
@@ -453,6 +456,7 @@ class Orchestrator(BaseOrchestrator[AgentT, UserT, Message]):
         self.solo_mode = solo_mode
         self.validate_communication = validate_communication
         self.verifier = verifier
+        self.verifier_max_revisions = verifier_max_revisions
         self.verifier_records: list[VerifierRecord] = []
 
         # Turn-based routing state
@@ -883,21 +887,38 @@ class Orchestrator(BaseOrchestrator[AgentT, UserT, Message]):
                 agent_msg, proposed_state = self.agent.generate_next_message(
                     self.message, deepcopy(state_before)
                 )
-                verdict = self.verifier.verify(
-                    policy=self.environment.get_policy(),
-                    task=self.task,
-                    history=deepcopy(self.trajectory),
-                    proposed_message=deepcopy(agent_msg),
-                )
-                self.verifier_records.append(
-                    VerifierRecord(
-                        proposal_index=len(self.verifier_records),
-                        history_length=len(self.trajectory),
-                        proposed_message=agent_msg.model_dump(mode="json"),
-                        verdict=verdict,
+                verdict = self._verify_proposal(agent_msg, revision_attempt=0)
+                if verdict.decision == VerifierDecision.REVISE:
+                    feedback = verdict.revision_instruction or verdict.reason
+                    revision_method = getattr(
+                        self.agent,
+                        "generate_next_message_with_verifier_feedback",
+                        None,
                     )
-                )
+                    if self.verifier_max_revisions > 0 and callable(revision_method):
+                        print(
+                            "[verifier] revision requested; regenerating one "
+                            "uncommitted replacement proposal.",
+                            flush=True,
+                        )
+                        agent_msg, proposed_state = revision_method(
+                            self.message,
+                            deepcopy(state_before),
+                            feedback,
+                        )
+                        verdict = self._verify_proposal(agent_msg, revision_attempt=1)
+                    else:
+                        print(
+                            "[verifier] revision requested, but this agent does not "
+                            "support private revision feedback or revisions are disabled.",
+                            flush=True,
+                        )
                 if verdict.decision != VerifierDecision.PASS:
+                    print(
+                        "[verifier] proposal rejected; no message or tool call was "
+                        "committed to the official trajectory.",
+                        flush=True,
+                    )
                     self.agent_state = state_before
                     self.done = True
                     self.termination_reason = TerminationReason.VERIFIER_REJECTED
@@ -940,6 +961,39 @@ class Orchestrator(BaseOrchestrator[AgentT, UserT, Message]):
             self.check_communication_error()
         self.step_count += 1
         self.environment.sync_tools()
+
+    def _verify_proposal(
+        self, proposed_message: AssistantMessage, *, revision_attempt: int
+    ):
+        """Verify and audit a proposal before it can affect state or trajectory."""
+        assert self.verifier is not None
+        verdict = self.verifier.verify(
+            policy=self.environment.get_policy(),
+            task=self.task,
+            history=deepcopy(self.trajectory),
+            proposed_message=deepcopy(proposed_message),
+        )
+        self.verifier_records.append(
+            VerifierRecord(
+                proposal_index=len(self.verifier_records),
+                history_length=len(self.trajectory),
+                proposed_message=proposed_message.model_dump(mode="json"),
+                verdict=verdict,
+                revision_attempt=revision_attempt,
+            )
+        )
+        print(
+            "[verifier] "
+            f"attempt={revision_attempt} decision={verdict.decision.value} "
+            f"reason={verdict.reason}",
+            flush=True,
+        )
+        if verdict.decision == VerifierDecision.PASS:
+            print(
+                "[verifier] proposal accepted; it may now be committed and routed.",
+                flush=True,
+            )
+        return verdict
 
     def get_trajectory(self) -> list[Message]:
         """
