@@ -169,6 +169,7 @@ def get_info(config: RunConfig, **overrides) -> Info:
         implementation=config.effective_agent,
         llm=agent_llm,
         llm_args=agent_llm_args,
+        pre_verifier=getattr(config, "pre_verifier", None),
     )
     # Build env_kwargs so the environment is constructed with the correct
     # retrieval variant (needed for banking_knowledge; no-op for other domains).

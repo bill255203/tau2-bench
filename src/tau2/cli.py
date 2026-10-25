@@ -255,6 +255,14 @@ def add_run_args(parser):
         help="Maximum verifier-directed replacement proposals per agent turn. Default is 1.",
     )
     parser.add_argument(
+        "--pre-verifier",
+        type=str,
+        choices=["v1"],
+        default=None,
+        help="Deterministic pre-verifier rule applied to each agent request before "
+        "the model call (llm_agent only). Default is off.",
+    )
+    parser.add_argument(
         "--user-persona",
         type=json.loads,
         default=None,
@@ -735,6 +743,7 @@ def main():
                 verifier_model=args.verifier_model,
                 verifier_llm_args=args.verifier_llm_args,
                 verifier_max_revisions=args.verifier_max_revisions,
+                pre_verifier=args.pre_verifier,
             )
 
         return run_domain(config)

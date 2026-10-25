@@ -76,6 +76,7 @@ def build_agent(
     audio_native_config: Optional[AudioNativeConfig] = None,
     solo_mode: bool = False,
     audio_taps_dir: Optional[Path] = None,
+    pre_verifier: Optional[str] = None,
 ) -> Union[HalfDuplexAgent, FullDuplexAgent]:
     """Build an agent from a registered name and an environment.
 
@@ -115,7 +116,8 @@ def build_agent(
         except Exception:
             pass
 
-    return agent_factory(
+    extra_kwargs = {"pre_verifier": pre_verifier} if pre_verifier is not None else {}
+    agent = agent_factory(
         tools=tools,
         domain_policy=environment.get_policy(),
         llm=llm,
@@ -123,7 +125,17 @@ def build_agent(
         task=task,
         audio_native_config=audio_native_config,
         audio_taps_dir=audio_taps_dir,
+        **extra_kwargs,
     )
+    if (
+        pre_verifier is not None
+        and getattr(agent, "pre_verifier", None) != pre_verifier
+    ):
+        raise ValueError(
+            f"Agent '{agent_name}' does not support the pre-verifier "
+            f"(requested rule: {pre_verifier})."
+        )
+    return agent
 
 
 def build_user(
@@ -401,6 +413,7 @@ def build_text_orchestrator(
         llm_args=config.llm_args_agent,
         task=task,
         solo_mode=solo_mode,
+        pre_verifier=config.pre_verifier,
     )
 
     user = build_user(
