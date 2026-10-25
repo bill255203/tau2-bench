@@ -10,7 +10,6 @@ from tau2.data_model.message import (
     ToolMessage,
     UserMessage,
 )
-from tau2.data_model.tasks import Task
 from tau2.utils.llm_utils import extract_json_from_llm_response, generate
 from tau2.verifier.base import Verifier
 from tau2.verifier.models import VerifierVerdict
@@ -92,14 +91,12 @@ class LLMVerifier(Verifier):
         self,
         *,
         policy: str,
-        task: Task,
         history: list[Message],
         proposed_message: AssistantMessage,
     ) -> VerifierVerdict:
         """Verify one proposal using the full committed history."""
         payload = {
             "policy": policy,
-            "task": task.model_dump(mode="json"),
             "committed_history": [_compact_message(message) for message in history],
             "proposed_agent_output": _compact_message(proposed_message),
         }

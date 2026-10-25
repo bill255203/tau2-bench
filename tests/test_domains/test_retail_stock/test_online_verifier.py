@@ -1,5 +1,6 @@
 """Minimal retail-stock validation for transactional agent verification."""
 
+import json
 from typing import Optional
 
 from tau2.agent.base_agent import HalfDuplexAgent, ValidAgentInputMessage
@@ -53,14 +54,12 @@ class RecordingVerifier(Verifier):
         self,
         *,
         policy: str,
-        task,
         history: list[Message],
         proposed_message: AssistantMessage,
     ) -> VerifierVerdict:
         self.calls.append(
             {
                 "policy": policy,
-                "task_id": task.id,
                 "history": history,
                 "proposal": proposed_message,
             }
@@ -83,7 +82,6 @@ class SequencedVerifier(RecordingVerifier):
         self.calls.append(
             {
                 "policy": kwargs["policy"],
-                "task_id": kwargs["task"].id,
                 "history": kwargs["history"],
                 "proposal": kwargs["proposed_message"],
             }
@@ -170,7 +168,7 @@ def test_passing_verifier_commits_retail_stock_proposal() -> None:
     orchestrator.step()
 
     assert len(verifier.calls) == 1
-    assert verifier.calls[0]["task_id"] == orchestrator.task.id
+    assert verifier.calls[0]["policy"] == orchestrator.environment.get_policy()
     assert verifier.calls[0]["history"] == orchestrator.trajectory[:-1]
     assert verifier.calls[0]["proposal"].tool_calls[0].name == "get_variant_stock"
     assert orchestrator.agent_state == {"proposals": 1}
@@ -270,7 +268,6 @@ def test_llm_verifier_parses_structured_result(monkeypatch) -> None:
         )
 
     monkeypatch.setattr("tau2.verifier.llm_verifier.generate", fake_generate)
-    task = get_tasks()[0]
     verifier = LLMVerifier("test/verifier-model", {"temperature": 0.0})
     history = [
         UserMessage(
@@ -296,7 +293,6 @@ def test_llm_verifier_parses_structured_result(monkeypatch) -> None:
 
     verdict = verifier.verify(
         policy=get_environment().get_policy(),
-        task=task,
         history=history,
         proposed_message=proposal,
     )
@@ -312,3 +308,39 @@ def test_llm_verifier_parses_structured_result(monkeypatch) -> None:
     assert "prompt_tokens" not in verifier_payload
     assert "Check this variant's stock." in verifier_payload
     assert "get_variant_stock" in verifier_payload
+
+
+def test_llm_verifier_input_excludes_hidden_task_fields(monkeypatch) -> None:
+    captured_messages = []
+
+    def fake_generate(**kwargs):
+        captured_messages.extend(kwargs["messages"])
+        return AssistantMessage(
+            role="assistant",
+            content=(
+                '{"decision":"pass","reason":"grounded stock lookup",'
+                '"revision_instruction":null,"confidence":1.0}'
+            ),
+        )
+
+    monkeypatch.setattr("tau2.verifier.llm_verifier.generate", fake_generate)
+    orchestrator = _orchestrator(LLMVerifier("test/verifier-model"))
+    task = orchestrator.task
+    # The task must carry hidden fields for this test to mean anything.
+    assert task.evaluation_criteria is not None
+    assert task.user_scenario is not None
+
+    orchestrator.step()
+
+    assert len(orchestrator.verifier_records) == 1
+    assert set(json.loads(captured_messages[1].content)) == {
+        "policy",
+        "committed_history",
+        "proposed_agent_output",
+    }
+    verifier_input = "\n".join(message.content for message in captured_messages)
+    assert "evaluation_criteria" not in verifier_input
+    assert "user_scenario" not in verifier_input
+    # Values from the hidden fields must not leak under other keys either.
+    assert task.id not in verifier_input
+    assert task.user_scenario.instructions.task_instructions not in verifier_input

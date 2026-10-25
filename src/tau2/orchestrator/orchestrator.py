@@ -969,7 +969,6 @@ class Orchestrator(BaseOrchestrator[AgentT, UserT, Message]):
         assert self.verifier is not None
         verdict = self.verifier.verify(
             policy=self.environment.get_policy(),
-            task=self.task,
             history=deepcopy(self.trajectory),
             proposed_message=deepcopy(proposed_message),
         )
