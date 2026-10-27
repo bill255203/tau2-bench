@@ -16,6 +16,7 @@ from tau2.agent.base_agent import (
     is_valid_agent_history_message,
 )
 from tau2.agent.llm_agent import LLMSoloAgent
+from tau2.agent.pre_verifier import PreVerifierRecord
 from tau2.data_model.message import (
     AssistantMessage,
     Message,
@@ -458,6 +459,7 @@ class Orchestrator(BaseOrchestrator[AgentT, UserT, Message]):
         self.verifier = verifier
         self.verifier_max_revisions = verifier_max_revisions
         self.verifier_records: list[VerifierRecord] = []
+        self.pre_verifier_records: list[PreVerifierRecord] = []
 
         # Turn-based routing state
         self.from_role: Optional[Role] = None
@@ -651,6 +653,7 @@ class Orchestrator(BaseOrchestrator[AgentT, UserT, Message]):
                 first_message, self.agent_state = self.agent.generate_next_message(
                     None, self.agent_state
                 )
+                self._collect_pre_verifier_records(revision_attempt=0)
                 self.trajectory = [first_message]
                 self.message = first_message
                 # In solo mode, there is no user, so if the message is not a tool call, then we end and report an agent error
@@ -823,21 +826,46 @@ class Orchestrator(BaseOrchestrator[AgentT, UserT, Message]):
             seed=self.seed,
             mode=self.mode.value,
             speech_environment=speech_environment,
-            info=(
-                {
-                    "verifier": {
-                        "enabled": True,
-                        "records": [
-                            record.model_dump(mode="json")
-                            for record in self.verifier_records
-                        ],
-                    }
-                }
-                if self.verifier is not None
-                else None
-            ),
+            info=self._build_verifier_info(),
         )
         return simulation_run
+
+    def _build_verifier_info(self) -> Optional[dict]:
+        """Verifier and pre-verifier records for SimulationRun.info, or None."""
+        info: dict = {}
+        if self.verifier is not None:
+            info["verifier"] = {
+                "enabled": True,
+                "records": [
+                    record.model_dump(mode="json") for record in self.verifier_records
+                ],
+            }
+        pre_verifier_rule = getattr(self.agent, "pre_verifier", None)
+        if pre_verifier_rule is not None:
+            info["pre_verifier"] = {
+                "enabled": True,
+                "rule": pre_verifier_rule,
+                "records": [
+                    record.model_dump(mode="json")
+                    for record in self.pre_verifier_records
+                ],
+            }
+        return info or None
+
+    def _collect_pre_verifier_records(self, *, revision_attempt: int) -> None:
+        """Move the agent's new pre-verifier records here, tagged for joining.
+
+        ``history_length`` and ``revision_attempt`` match the fields of the
+        verifier record for the same proposal. Records of rejected proposals
+        are kept too.
+        """
+        pop_records = getattr(self.agent, "pop_pre_verifier_records", None)
+        if not callable(pop_records):
+            return
+        for record in pop_records():
+            record.history_length = len(self.trajectory)
+            record.revision_attempt = revision_attempt
+            self.pre_verifier_records.append(record)
 
     def step(self):
         """
@@ -882,11 +910,13 @@ class Orchestrator(BaseOrchestrator[AgentT, UserT, Message]):
                 agent_msg, self.agent_state = self.agent.generate_next_message(
                     self.message, self.agent_state
                 )
+                self._collect_pre_verifier_records(revision_attempt=0)
             else:
                 state_before = deepcopy(self.agent_state)
                 agent_msg, proposed_state = self.agent.generate_next_message(
                     self.message, deepcopy(state_before)
                 )
+                self._collect_pre_verifier_records(revision_attempt=0)
                 verdict = self._verify_proposal(agent_msg, revision_attempt=0)
                 if verdict.decision == VerifierDecision.REVISE:
                     feedback = verdict.revision_instruction or verdict.reason
@@ -906,6 +936,7 @@ class Orchestrator(BaseOrchestrator[AgentT, UserT, Message]):
                             deepcopy(state_before),
                             feedback,
                         )
+                        self._collect_pre_verifier_records(revision_attempt=1)
                         verdict = self._verify_proposal(agent_msg, revision_attempt=1)
                     else:
                         print(

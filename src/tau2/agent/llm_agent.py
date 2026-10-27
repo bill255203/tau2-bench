@@ -9,6 +9,12 @@ from tau2.agent.base_agent import (
     ValidAgentInputMessage,
     is_valid_agent_history_message,
 )
+from tau2.agent.pre_verifier import (
+    PRE_VERIFIER_RULES,
+    PreVerifierRecord,
+    mark_called_removed_tools,
+    prepare,
+)
 from tau2.data_model.message import (
     APICompatibleMessage,
     AssistantMessage,
@@ -77,9 +83,14 @@ class LLMAgent(
         domain_policy: str,
         llm: str,
         llm_args: Optional[dict] = None,
+        pre_verifier: Optional[str] = None,
     ):
         """
         Initialize the LLMAgent.
+
+        Args:
+            pre_verifier: Optional pre-verifier rule (e.g. "v1") applied to the
+                copy of the request sent to the model. None disables it.
         """
         super().__init__(
             tools=tools,
@@ -87,6 +98,11 @@ class LLMAgent(
             llm=llm,
             llm_args=llm_args,
         )
+        if pre_verifier is not None and pre_verifier not in PRE_VERIFIER_RULES:
+            raise ValueError(f"Unknown pre-verifier rule: {pre_verifier}")
+        self.pre_verifier = pre_verifier
+        self._pre_verifier_records: list[PreVerifierRecord] = []
+        self._in_verifier_revision = False
 
     @property
     def system_prompt(self) -> str:
@@ -142,10 +158,17 @@ class LLMAgent(
             content=VERIFIER_REVISION_PROMPT.format(feedback=feedback),
         )
         state.system_messages.append(feedback_message)
+        self._in_verifier_revision = True
         try:
             return self.generate_next_message(message, state)
         finally:
+            self._in_verifier_revision = False
             state.system_messages.pop()
+
+    def pop_pre_verifier_records(self) -> list[PreVerifierRecord]:
+        """Return and clear the pre-verifier records made since the last call."""
+        records, self._pre_verifier_records = self._pre_verifier_records, []
+        return records
 
     def _generate_next_message(
         self, message: ValidAgentInputMessage, state: LLMAgentStateType
@@ -160,13 +183,24 @@ class LLMAgent(
         else:
             state.messages.append(message)
         messages = state.system_messages + state.messages
+        tools = self.tools
+        record = None
+        if self.pre_verifier is not None:
+            # Only the copy sent to the model changes; state.messages keeps everything.
+            messages, tools, record = prepare(
+                messages, self.tools, self.domain_policy, rule=self.pre_verifier
+            )
+            record.revision = self._in_verifier_revision
+            self._pre_verifier_records.append(record)
         assistant_message = generate(
             model=self.llm,
-            tools=self.tools,
+            tools=tools,
             messages=messages,
             call_name="agent_response",
             **self.llm_args,
         )
+        if record is not None:
+            mark_called_removed_tools(record, assistant_message)
         return assistant_message
 
 
@@ -532,12 +566,14 @@ def create_llm_agent(tools, domain_policy, **kwargs):
         **kwargs: Additional arguments. Supports:
             - llm (str): LLM model name.
             - llm_args (dict): Additional LLM arguments.
+            - pre_verifier (str): Optional pre-verifier rule (e.g. "v1").
     """
     return LLMAgent(
         tools=tools,
         domain_policy=domain_policy,
         llm=kwargs.get("llm"),
         llm_args=kwargs.get("llm_args"),
+        pre_verifier=kwargs.get("pre_verifier"),
     )
 
 
