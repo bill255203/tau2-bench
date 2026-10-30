@@ -610,13 +610,28 @@ class TextRunConfig(BaseRunConfig):
         ),
     ]
     pre_verifier: Annotated[
-        Optional[Literal["v1"]],
+        Optional[Literal["v1", "v2"]],
         Field(
             description=(
-                "Optional deterministic pre-verifier rule applied to the copy of "
-                "each agent request before the model call (llm_agent only)."
+                "Optional pre-verifier rule applied to the copy of each agent "
+                "request before the model call (llm_agent only). v1 is "
+                "deterministic; v2 adds one model call to narrow order write tools."
             ),
             default=None,
+        ),
+    ]
+    pre_verifier_model: Annotated[
+        Optional[str],
+        Field(
+            description="Model for pre-verifier rule v2. None uses the agent's model.",
+            default=None,
+        ),
+    ]
+    pre_verifier_llm_args: Annotated[
+        dict,
+        Field(
+            description="Arguments passed to the pre-verifier model (rule v2).",
+            default_factory=dict,
         ),
     ]
 
@@ -1248,6 +1263,10 @@ class AgentInfo(BaseModel):
     )
     pre_verifier: Optional[str] = Field(
         description="The pre-verifier rule used by the agent, if any.", default=None
+    )
+    pre_verifier_model: Optional[str] = Field(
+        description="The model set for pre-verifier rule v2, if any (None uses the agent's model).",
+        default=None,
     )
     voice_settings: Optional[VoiceSettings] = Field(
         description="Voice synthesis and transcription settings for the agent",

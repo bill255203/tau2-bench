@@ -14,6 +14,7 @@ from tau2.agent.pre_verifier import (
     PreVerifierRecord,
     mark_called_removed_tools,
     prepare,
+    select_order_tools,
 )
 from tau2.data_model.message import (
     APICompatibleMessage,
@@ -84,13 +85,18 @@ class LLMAgent(
         llm: str,
         llm_args: Optional[dict] = None,
         pre_verifier: Optional[str] = None,
+        pre_verifier_llm: Optional[str] = None,
+        pre_verifier_llm_args: Optional[dict] = None,
     ):
         """
         Initialize the LLMAgent.
 
         Args:
-            pre_verifier: Optional pre-verifier rule (e.g. "v1") applied to the
-                copy of the request sent to the model. None disables it.
+            pre_verifier: Optional pre-verifier rule ("v1" or "v2") applied to
+                the copy of the request sent to the model. None disables it.
+            pre_verifier_llm: Model for rule v2's tool selection. None uses the
+                agent's model and arguments.
+            pre_verifier_llm_args: Arguments for ``pre_verifier_llm``.
         """
         super().__init__(
             tools=tools,
@@ -101,6 +107,8 @@ class LLMAgent(
         if pre_verifier is not None and pre_verifier not in PRE_VERIFIER_RULES:
             raise ValueError(f"Unknown pre-verifier rule: {pre_verifier}")
         self.pre_verifier = pre_verifier
+        self.pre_verifier_llm = pre_verifier_llm
+        self.pre_verifier_llm_args = dict(pre_verifier_llm_args or {})
         self._pre_verifier_records: list[PreVerifierRecord] = []
         self._in_verifier_revision = False
 
@@ -190,6 +198,14 @@ class LLMAgent(
             messages, tools, record = prepare(
                 messages, self.tools, self.domain_policy, rule=self.pre_verifier
             )
+            if self.pre_verifier == "v2":
+                if self.pre_verifier_llm is None:
+                    llm, llm_args = self.llm, self.llm_args
+                else:
+                    llm, llm_args = self.pre_verifier_llm, self.pre_verifier_llm_args
+                tools = select_order_tools(
+                    messages, tools, record, llm=llm, llm_args=llm_args
+                )
             record.revision = self._in_verifier_revision
             self._pre_verifier_records.append(record)
         assistant_message = generate(
@@ -566,7 +582,9 @@ def create_llm_agent(tools, domain_policy, **kwargs):
         **kwargs: Additional arguments. Supports:
             - llm (str): LLM model name.
             - llm_args (dict): Additional LLM arguments.
-            - pre_verifier (str): Optional pre-verifier rule (e.g. "v1").
+            - pre_verifier (str): Optional pre-verifier rule ("v1" or "v2").
+            - pre_verifier_llm (str): Optional model for rule v2.
+            - pre_verifier_llm_args (dict): Arguments for pre_verifier_llm.
     """
     return LLMAgent(
         tools=tools,
@@ -574,6 +592,8 @@ def create_llm_agent(tools, domain_policy, **kwargs):
         llm=kwargs.get("llm"),
         llm_args=kwargs.get("llm_args"),
         pre_verifier=kwargs.get("pre_verifier"),
+        pre_verifier_llm=kwargs.get("pre_verifier_llm"),
+        pre_verifier_llm_args=kwargs.get("pre_verifier_llm_args"),
     )
 
 

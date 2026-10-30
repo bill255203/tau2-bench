@@ -257,10 +257,23 @@ def add_run_args(parser):
     parser.add_argument(
         "--pre-verifier",
         type=str,
-        choices=["v1"],
+        choices=["v1", "v2"],
         default=None,
-        help="Deterministic pre-verifier rule applied to each agent request before "
-        "the model call (llm_agent only). Default is off.",
+        help="Pre-verifier rule applied to each agent request before the model "
+        "call (llm_agent only). v1 is deterministic; v2 adds one model call to "
+        "narrow order write tools. Default is off.",
+    )
+    parser.add_argument(
+        "--pre-verifier-model",
+        type=str,
+        default=None,
+        help="Model for pre-verifier rule v2. Default is the agent's model and arguments.",
+    )
+    parser.add_argument(
+        "--pre-verifier-llm-args",
+        type=json.loads,
+        default={},
+        help="JSON arguments passed to the pre-verifier model (rule v2).",
     )
     parser.add_argument(
         "--user-persona",
@@ -744,6 +757,8 @@ def main():
                 verifier_llm_args=args.verifier_llm_args,
                 verifier_max_revisions=args.verifier_max_revisions,
                 pre_verifier=args.pre_verifier,
+                pre_verifier_model=args.pre_verifier_model,
+                pre_verifier_llm_args=args.pre_verifier_llm_args,
             )
 
         return run_domain(config)
