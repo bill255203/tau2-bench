@@ -77,6 +77,8 @@ def build_agent(
     solo_mode: bool = False,
     audio_taps_dir: Optional[Path] = None,
     pre_verifier: Optional[str] = None,
+    pre_verifier_llm: Optional[str] = None,
+    pre_verifier_llm_args: Optional[dict] = None,
 ) -> Union[HalfDuplexAgent, FullDuplexAgent]:
     """Build an agent from a registered name and an environment.
 
@@ -116,7 +118,15 @@ def build_agent(
         except Exception:
             pass
 
+    if (pre_verifier_llm is not None or pre_verifier_llm_args) and pre_verifier != "v2":
+        raise ValueError("The pre-verifier model is only used by pre-verifier rule v2.")
+    if pre_verifier_llm_args and pre_verifier_llm is None:
+        raise ValueError("Pre-verifier model arguments need a pre-verifier model.")
     extra_kwargs = {"pre_verifier": pre_verifier} if pre_verifier is not None else {}
+    if pre_verifier_llm is not None:
+        extra_kwargs["pre_verifier_llm"] = pre_verifier_llm
+    if pre_verifier_llm_args:
+        extra_kwargs["pre_verifier_llm_args"] = pre_verifier_llm_args
     agent = agent_factory(
         tools=tools,
         domain_policy=environment.get_policy(),
@@ -414,6 +424,8 @@ def build_text_orchestrator(
         task=task,
         solo_mode=solo_mode,
         pre_verifier=config.pre_verifier,
+        pre_verifier_llm=config.pre_verifier_model,
+        pre_verifier_llm_args=config.pre_verifier_llm_args,
     )
 
     user = build_user(

@@ -170,6 +170,8 @@ def get_info(config: RunConfig, **overrides) -> Info:
         llm=agent_llm,
         llm_args=agent_llm_args,
         pre_verifier=getattr(config, "pre_verifier", None),
+        pre_verifier_model=getattr(config, "pre_verifier_model", None),
+        pre_verifier_llm_args=getattr(config, "pre_verifier_llm_args", None) or None,
     )
     # Build env_kwargs so the environment is constructed with the correct
     # retrieval variant (needed for banking_knowledge; no-op for other domains).

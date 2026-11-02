@@ -14,6 +14,8 @@ from tau2.agent.pre_verifier import (
     PreVerifierRecord,
     mark_called_removed_tools,
     prepare,
+    select_order_tools,
+    selection_candidates,
 )
 from tau2.data_model.message import (
     APICompatibleMessage,
@@ -84,13 +86,18 @@ class LLMAgent(
         llm: str,
         llm_args: Optional[dict] = None,
         pre_verifier: Optional[str] = None,
+        pre_verifier_llm: Optional[str] = None,
+        pre_verifier_llm_args: Optional[dict] = None,
     ):
         """
         Initialize the LLMAgent.
 
         Args:
-            pre_verifier: Optional pre-verifier rule (e.g. "v1") applied to the
-                copy of the request sent to the model. None disables it.
+            pre_verifier: Optional pre-verifier rule ("v1" or "v2") applied to
+                the copy of the request sent to the model. None disables it.
+            pre_verifier_llm: Model for rule v2's tool selection. None uses the
+                agent's model and arguments.
+            pre_verifier_llm_args: Arguments for ``pre_verifier_llm``.
         """
         super().__init__(
             tools=tools,
@@ -101,6 +108,8 @@ class LLMAgent(
         if pre_verifier is not None and pre_verifier not in PRE_VERIFIER_RULES:
             raise ValueError(f"Unknown pre-verifier rule: {pre_verifier}")
         self.pre_verifier = pre_verifier
+        self.pre_verifier_llm = pre_verifier_llm
+        self.pre_verifier_llm_args = dict(pre_verifier_llm_args or {})
         self._pre_verifier_records: list[PreVerifierRecord] = []
         self._in_verifier_revision = False
 
@@ -109,6 +118,17 @@ class LLMAgent(
         return SYSTEM_PROMPT.format(
             domain_policy=self.domain_policy, agent_instruction=AGENT_INSTRUCTION
         )
+
+    def set_seed(self, seed: int):
+        """Set the seed for the agent's model and, if set, the rule v2 model."""
+        super().set_seed(seed)
+        if self.pre_verifier_llm is not None:
+            cur_seed = self.pre_verifier_llm_args.get("seed", None)
+            if cur_seed is not None:
+                logger.warning(
+                    f"Pre-verifier seed is already set to {cur_seed}, resetting it to {seed}"
+                )
+            self.pre_verifier_llm_args["seed"] = seed
 
     def get_init_state(
         self, message_history: Optional[list[Message]] = None
@@ -190,6 +210,19 @@ class LLMAgent(
             messages, tools, record = prepare(
                 messages, self.tools, self.domain_policy, rule=self.pre_verifier
             )
+            if self.pre_verifier == "v2" and self._in_verifier_revision:
+                # The selector cannot see the verifier's feedback and could hide
+                # the tool it asks for, so the replacement gets the v1 set.
+                if selection_candidates(tools, record):
+                    record.model_skipped = "verifier_revision"
+            elif self.pre_verifier == "v2":
+                if self.pre_verifier_llm is None:
+                    llm, llm_args = self.llm, self.llm_args
+                else:
+                    llm, llm_args = self.pre_verifier_llm, self.pre_verifier_llm_args
+                tools = select_order_tools(
+                    messages, tools, record, llm=llm, llm_args=llm_args
+                )
             record.revision = self._in_verifier_revision
             self._pre_verifier_records.append(record)
         assistant_message = generate(
@@ -566,7 +599,9 @@ def create_llm_agent(tools, domain_policy, **kwargs):
         **kwargs: Additional arguments. Supports:
             - llm (str): LLM model name.
             - llm_args (dict): Additional LLM arguments.
-            - pre_verifier (str): Optional pre-verifier rule (e.g. "v1").
+            - pre_verifier (str): Optional pre-verifier rule ("v1" or "v2").
+            - pre_verifier_llm (str): Optional model for rule v2.
+            - pre_verifier_llm_args (dict): Arguments for pre_verifier_llm.
     """
     return LLMAgent(
         tools=tools,
@@ -574,6 +609,8 @@ def create_llm_agent(tools, domain_policy, **kwargs):
         llm=kwargs.get("llm"),
         llm_args=kwargs.get("llm_args"),
         pre_verifier=kwargs.get("pre_verifier"),
+        pre_verifier_llm=kwargs.get("pre_verifier_llm"),
+        pre_verifier_llm_args=kwargs.get("pre_verifier_llm_args"),
     )
 
 

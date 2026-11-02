@@ -16,7 +16,7 @@ from tau2.agent.base_agent import (
     is_valid_agent_history_message,
 )
 from tau2.agent.llm_agent import LLMSoloAgent
-from tau2.agent.pre_verifier import PreVerifierRecord
+from tau2.agent.pre_verifier import PreVerifierRecord, summarize_records
 from tau2.data_model.message import (
     AssistantMessage,
     Message,
@@ -845,6 +845,7 @@ class Orchestrator(BaseOrchestrator[AgentT, UserT, Message]):
             info["pre_verifier"] = {
                 "enabled": True,
                 "rule": pre_verifier_rule,
+                "summary": summarize_records(self.pre_verifier_records),
                 "records": [
                     record.model_dump(mode="json")
                     for record in self.pre_verifier_records
