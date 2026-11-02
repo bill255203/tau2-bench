@@ -15,6 +15,7 @@ from tau2.agent.pre_verifier import (
     mark_called_removed_tools,
     prepare,
     select_order_tools,
+    selection_candidates,
 )
 from tau2.data_model.message import (
     APICompatibleMessage,
@@ -118,6 +119,17 @@ class LLMAgent(
             domain_policy=self.domain_policy, agent_instruction=AGENT_INSTRUCTION
         )
 
+    def set_seed(self, seed: int):
+        """Set the seed for the agent's model and, if set, the rule v2 model."""
+        super().set_seed(seed)
+        if self.pre_verifier_llm is not None:
+            cur_seed = self.pre_verifier_llm_args.get("seed", None)
+            if cur_seed is not None:
+                logger.warning(
+                    f"Pre-verifier seed is already set to {cur_seed}, resetting it to {seed}"
+                )
+            self.pre_verifier_llm_args["seed"] = seed
+
     def get_init_state(
         self, message_history: Optional[list[Message]] = None
     ) -> LLMAgentStateType:
@@ -198,7 +210,12 @@ class LLMAgent(
             messages, tools, record = prepare(
                 messages, self.tools, self.domain_policy, rule=self.pre_verifier
             )
-            if self.pre_verifier == "v2":
+            if self.pre_verifier == "v2" and self._in_verifier_revision:
+                # The selector cannot see the verifier's feedback and could hide
+                # the tool it asks for, so the replacement gets the v1 set.
+                if selection_candidates(tools, record):
+                    record.model_skipped = "verifier_revision"
+            elif self.pre_verifier == "v2":
                 if self.pre_verifier_llm is None:
                     llm, llm_args = self.llm, self.llm_args
                 else:

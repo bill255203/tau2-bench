@@ -1268,6 +1268,10 @@ class AgentInfo(BaseModel):
         description="The model set for pre-verifier rule v2, if any (None uses the agent's model).",
         default=None,
     )
+    pre_verifier_llm_args: Optional[dict] = Field(
+        description="The arguments set for the pre-verifier rule v2 model, if any.",
+        default=None,
+    )
     voice_settings: Optional[VoiceSettings] = Field(
         description="Voice synthesis and transcription settings for the agent",
         default=None,

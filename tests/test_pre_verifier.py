@@ -5,12 +5,20 @@ import json
 from copy import deepcopy
 from typing import Optional
 
+import httpx
+import litellm
 import pytest
 from pydantic import ValidationError
 
 from tau2 import cli
 from tau2.agent.llm_agent import LLMAgent
-from tau2.agent.pre_verifier import prepare, select_order_tools, tool_chars
+from tau2.agent.pre_verifier import (
+    PreVerifierRecord,
+    prepare,
+    select_order_tools,
+    summarize_records,
+    tool_chars,
+)
 from tau2.data_model.message import (
     AssistantMessage,
     Message,
@@ -29,6 +37,7 @@ from tau2.runner import build as build_module
 from tau2.runner.build import build_agent, build_text_orchestrator
 from tau2.runner.helpers import get_info
 from tau2.user.user_simulator import DummyUser
+from tau2.utils.pydantic_utils import get_pydantic_hash
 from tau2.verifier.base import Verifier
 from tau2.verifier.models import VerifierDecision, VerifierVerdict
 
@@ -468,8 +477,10 @@ class FakeGenerate:
         return reply
 
 
-def _text(content: Optional[str], cost: Optional[float] = None) -> AssistantMessage:
-    return AssistantMessage(role="assistant", content=content, cost=cost)
+def _text(
+    content: Optional[str], cost: Optional[float] = None, usage: Optional[dict] = None
+) -> AssistantMessage:
+    return AssistantMessage(role="assistant", content=content, cost=cost, usage=usage)
 
 
 def _agent(
@@ -727,6 +738,111 @@ def test_v2_unusable_reply_keeps_the_v1_set(environment, monkeypatch, reply, fal
     assert record.tool_chars_after == v1_record.tool_chars_after
 
 
+def test_v2_records_usage_and_time(environment, monkeypatch):
+    usage = {"prompt_tokens": 120, "completion_tokens": 9}
+    reply = _text('{"tools": ["cancel_pending_order"]}', cost=0.002, usage=usage)
+
+    _, record, _ = _select(environment, monkeypatch, _two_orders(), [reply])
+
+    assert record.model_usage == usage
+    assert record.model_seconds is not None and record.model_seconds >= 0
+
+
+def _litellm_error(error_class) -> Exception:
+    return error_class(
+        message="test",
+        model="test/selector",
+        llm_provider="test",
+        response=httpx.Response(400, request=httpx.Request("POST", "https://test")),
+    )
+
+
+@pytest.mark.parametrize(
+    "error_class",
+    [
+        litellm.AuthenticationError,
+        litellm.PermissionDeniedError,
+        litellm.NotFoundError,
+        litellm.BadRequestError,
+    ],
+)
+def test_v2_configuration_errors_stop_the_run(environment, monkeypatch, error_class):
+    with pytest.raises(error_class):
+        _select(environment, monkeypatch, _two_orders(), [_litellm_error(error_class)])
+
+
+@pytest.mark.parametrize(
+    "error_class",
+    [
+        litellm.ContextWindowExceededError,
+        litellm.ContentPolicyViolationError,
+        litellm.RateLimitError,
+    ],
+)
+def test_v2_call_errors_keep_the_v1_set(environment, monkeypatch, error_class):
+    v1_offered, _ = _offered(environment, _two_orders())
+
+    offered, record, _ = _select(
+        environment, monkeypatch, _two_orders(), [_litellm_error(error_class)]
+    )
+
+    assert offered == v1_offered
+    assert record.model_fallback == f"model_error: {error_class.__name__}"
+    assert record.model_seconds is not None
+
+
+def _v2_record(**fields) -> PreVerifierRecord:
+    return PreVerifierRecord(rule="v2", applied=True, message_count=1, **fields)
+
+
+def test_summary_counts_calls_fallbacks_skips_and_totals():
+    candidates = ["cancel_pending_order", "return_delivered_order_items"]
+    records = [
+        _v2_record(),  # fewer than two candidates: no call
+        _v2_record(
+            model_candidates=candidates,
+            model_kept=candidates[:1],
+            model_cost=0.002,
+            model_usage={"prompt_tokens": 100, "completion_tokens": 5},
+            model_seconds=0.5,
+        ),
+        _v2_record(
+            model_candidates=candidates,
+            model_fallback="empty",
+            model_cost=0.001,
+            model_usage={"prompt_tokens": 90, "completion_tokens": 4},
+            model_seconds=0.25,
+        ),
+        _v2_record(
+            model_candidates=candidates,
+            model_fallback="model_error: RateLimitError",
+            model_seconds=1.0,
+        ),
+        _v2_record(revision=True, model_skipped="verifier_revision"),
+    ]
+
+    assert summarize_records(records) == {
+        "model_calls": 3,
+        "model_fallbacks": {"empty": 1, "model_error: RateLimitError": 1},
+        "model_skipped": {"verifier_revision": 1},
+        "model_cost": pytest.approx(0.003),
+        "model_prompt_tokens": 190,
+        "model_completion_tokens": 9,
+        "model_seconds": 1.75,
+    }
+
+
+def test_summary_total_is_unknown_when_a_reply_has_no_cost():
+    record = _v2_record(
+        model_candidates=["a", "b"], model_kept=["a"], model_seconds=0.1
+    )
+
+    summary = summarize_records([record])
+
+    assert summary["model_cost"] is None
+    assert summary["model_prompt_tokens"] is None
+
+
 def test_v2_selector_inputs_exclude_task_data():
     assert list(inspect.signature(select_order_tools).parameters) == [
         "messages",
@@ -779,6 +895,47 @@ def test_agent_v2_sends_only_the_kept_tools(
     assert record.called_removed_tools == ["cancel_pending_order"]
 
 
+def test_v2_revision_uses_the_v1_set(environment, monkeypatch):
+    agent, fake = _agent(
+        environment, monkeypatch, [_text("Revised")], pre_verifier="v2"
+    )
+    selector = FakeGenerate([])
+    monkeypatch.setattr("tau2.agent.pre_verifier.generate", selector)
+    user_message = UserMessage(role="user", content="Return the lamp from #W1.")
+    v1_offered, _ = _offered(environment, _two_orders() + [user_message])
+    state = agent.get_init_state(message_history=_two_orders())
+
+    agent.generate_next_message_with_verifier_feedback(
+        user_message, state, "Offer an exchange instead."
+    )
+
+    # The selector cannot see the feedback, so it is not asked.
+    assert selector.calls == []
+    assert {tool.name for tool in fake.calls[0]["tools"]} == v1_offered
+    (record,) = agent.pop_pre_verifier_records()
+    assert record.revision
+    assert record.model_skipped == "verifier_revision"
+    assert record.model_candidates == []
+
+
+@pytest.mark.parametrize("agent_kwargs", [{}, {"pre_verifier_llm": "test/selector"}])
+def test_v2_seed_reaches_the_selector(environment, monkeypatch, agent_kwargs):
+    agent, fake = _agent(
+        environment, monkeypatch, [_text("Ok")], pre_verifier="v2", **agent_kwargs
+    )
+    selector = FakeGenerate([_text('{"tools": ["return_delivered_order_items"]}')])
+    monkeypatch.setattr("tau2.agent.pre_verifier.generate", selector)
+
+    agent.set_seed(7)
+    agent.generate_next_message(
+        UserMessage(role="user", content="Return the lamp from #W1."),
+        agent.get_init_state(message_history=_two_orders()),
+    )
+
+    assert fake.calls[0]["seed"] == 7
+    assert selector.calls[0]["seed"] == 7
+
+
 # ---------------------------------------------------------------------------
 # Orchestrator records
 # ---------------------------------------------------------------------------
@@ -827,6 +984,7 @@ def test_records_are_saved_without_a_post_verifier(environment, monkeypatch):
     info = orchestrator._build_verifier_info()
     assert set(info) == {"pre_verifier"}
     assert info["pre_verifier"]["rule"] == "v1"
+    assert info["pre_verifier"]["summary"]["model_calls"] == 0
     (record,) = info["pre_verifier"]["records"]
     assert record["history_length"] == history_length
     assert record["revision_attempt"] == 0
@@ -989,6 +1147,23 @@ def test_builder_passes_the_v2_model_to_the_agent():
     assert agent.pre_verifier_llm == "test/selector"
     assert agent.pre_verifier_llm_args == {"temperature": 0}
     assert get_info(config).agent_info.pre_verifier_model == "test/selector"
+
+
+def test_info_keeps_the_selector_args():
+    def info(llm_args):
+        config = TextRunConfig(
+            domain="retail",
+            pre_verifier="v2",
+            pre_verifier_model="test/selector",
+            pre_verifier_llm_args=llm_args,
+        )
+        return get_info(config)
+
+    first, second = info({"temperature": 0}), info({"temperature": 1})
+
+    assert first.agent_info.pre_verifier_llm_args == {"temperature": 0}
+    # Resuming compares this hash, so a change in the args alone is noticed.
+    assert get_pydantic_hash(first) != get_pydantic_hash(second)
 
 
 @pytest.mark.parametrize(
