@@ -28,6 +28,7 @@ from tau2.data_model.message import (
 from tau2.data_model.simulation import SimulationRun, TerminationReason
 from tau2.data_model.tasks import EnvFunctionCall, InitializationData, Task
 from tau2.environment.environment import Environment, EnvironmentInfo
+from tau2.environment.toolkit import ToolType
 from tau2.orchestrator.modes import CommunicationMode
 from tau2.user.user_simulator import DummyUser, UserSimulator, UserState
 from tau2.user.user_simulator_base import (
@@ -999,10 +1000,19 @@ class Orchestrator(BaseOrchestrator[AgentT, UserT, Message]):
     ):
         """Verify and audit a proposal before it can affect state or trajectory."""
         assert self.verifier is not None
+        verifier_environment = deepcopy(self.environment)
+        verifier_tools = []
+        if verifier_environment.tools is not None:
+            verifier_tools = [
+                tool
+                for name, tool in verifier_environment.tools.get_tools().items()
+                if verifier_environment.tools.tool_type(name) == ToolType.READ
+            ]
         verdict = self.verifier.verify(
             policy=self.environment.get_policy(),
             history=deepcopy(self.trajectory),
             proposed_message=deepcopy(proposed_message),
+            tools=verifier_tools,
         )
         self.verifier_records.append(
             VerifierRecord(

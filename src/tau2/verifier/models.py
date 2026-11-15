@@ -1,7 +1,7 @@
 """Data models for online verifier decisions and traces."""
 
 from enum import Enum
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -14,6 +14,14 @@ class VerifierDecision(str, Enum):
     BLOCK = "block"
 
 
+class VerifierCheck(BaseModel):
+    """One evidence-backed check performed before producing a verdict."""
+
+    claim: str
+    result: Literal["supported", "contradicted", "inconclusive"]
+    evidence: Optional[str] = None
+
+
 class VerifierVerdict(BaseModel):
     """Structured verifier response for one proposed agent output."""
 
@@ -21,6 +29,9 @@ class VerifierVerdict(BaseModel):
     reason: str
     revision_instruction: Optional[str] = None
     confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    checks_performed: list[VerifierCheck] = Field(default_factory=list)
+    violated_rule: Optional[str] = None
+    unmet_goals: list[str] = Field(default_factory=list)
 
 
 class VerifierRecord(BaseModel):

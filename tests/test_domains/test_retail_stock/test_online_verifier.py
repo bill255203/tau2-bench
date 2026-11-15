@@ -7,6 +7,7 @@ from tau2.agent.base_agent import HalfDuplexAgent, ValidAgentInputMessage
 from tau2.data_model.message import AssistantMessage, Message, ToolCall, UserMessage
 from tau2.data_model.simulation import TextRunConfig
 from tau2.domains.retail_stock.environment import get_environment, get_tasks
+from tau2.environment.tool import as_tool
 from tau2.orchestrator.orchestrator import Orchestrator, Role
 from tau2.runner.build import build_text_orchestrator
 from tau2.user.user_simulator import DummyUser
@@ -56,12 +57,14 @@ class RecordingVerifier(Verifier):
         policy: str,
         history: list[Message],
         proposed_message: AssistantMessage,
+        tools=None,
     ) -> VerifierVerdict:
         self.calls.append(
             {
                 "policy": policy,
                 "history": history,
                 "proposal": proposed_message,
+                "tools": tools,
             }
         )
         return VerifierVerdict(
@@ -84,6 +87,7 @@ class SequencedVerifier(RecordingVerifier):
                 "policy": kwargs["policy"],
                 "history": kwargs["history"],
                 "proposal": kwargs["proposed_message"],
+                "tools": kwargs.get("tools"),
             }
         )
         return self.verdicts[len(self.calls) - 1]
@@ -171,6 +175,7 @@ def test_passing_verifier_commits_retail_stock_proposal() -> None:
     assert verifier.calls[0]["policy"] == orchestrator.environment.get_policy()
     assert verifier.calls[0]["history"] == orchestrator.trajectory[:-1]
     assert verifier.calls[0]["proposal"].tool_calls[0].name == "get_variant_stock"
+    assert [tool.name for tool in verifier.calls[0]["tools"]] == ["get_variant_stock"]
     assert orchestrator.agent_state == {"proposals": 1}
     assert orchestrator.trajectory[-1].tool_calls[0].name == "get_variant_stock"
     assert orchestrator.to_role == Role.ENV
@@ -324,7 +329,7 @@ def test_llm_verifier_input_excludes_hidden_task_fields(monkeypatch) -> None:
         )
 
     monkeypatch.setattr("tau2.verifier.llm_verifier.generate", fake_generate)
-    orchestrator = _orchestrator(LLMVerifier("test/verifier-model"))
+    orchestrator = _orchestrator(LLMVerifier("test/verifier-model", min_tool_calls=0))
     task = orchestrator.task
     # The task must carry hidden fields for this test to mean anything.
     assert task.evaluation_criteria is not None
@@ -344,3 +349,149 @@ def test_llm_verifier_input_excludes_hidden_task_fields(monkeypatch) -> None:
     # Values from the hidden fields must not leak under other keys either.
     assert task.id not in verifier_input
     assert task.user_scenario.instructions.task_instructions not in verifier_input
+
+
+def test_llm_verifier_uses_read_tool_before_revising(monkeypatch) -> None:
+    """A verifier can inspect authoritative state before rejecting a proposal."""
+    calls = []
+
+    def inspect_order(order_id: str) -> dict:
+        """Inspect an order without modifying it.
+
+        Args:
+            order_id: The order to inspect.
+
+        Returns:
+            Current order state.
+        """
+        assert order_id == "#W123"
+        return {"order_id": order_id, "status": "delivered"}
+
+    def fake_generate(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            return AssistantMessage(
+                role="assistant",
+                tool_calls=[
+                    ToolCall(
+                        id="verify-order",
+                        name="inspect_order",
+                        arguments={"order_id": "#W123"},
+                    )
+                ],
+            )
+        return AssistantMessage(
+            role="assistant",
+            content=json.dumps(
+                {
+                    "decision": "revise",
+                    "reason": "The order is delivered, not pending.",
+                    "revision_instruction": "Do not modify this delivered order.",
+                    "confidence": 0.99,
+                    "checks_performed": [
+                        {
+                            "claim": "The order is modifiable",
+                            "result": "contradicted",
+                            "evidence": "inspect_order returned status=delivered",
+                        }
+                    ],
+                    "violated_rule": "Only pending orders may be modified.",
+                    "unmet_goals": [],
+                }
+            ),
+        )
+
+    monkeypatch.setattr("tau2.verifier.llm_verifier.generate", fake_generate)
+    verifier = LLMVerifier("test/verifier-model", max_tool_calls=2)
+    proposal = AssistantMessage(
+        role="assistant",
+        tool_calls=[
+            ToolCall(
+                id="modify-order",
+                name="modify_pending_order_address",
+                arguments={"order_id": "#W123"},
+            )
+        ],
+    )
+
+    verdict = verifier.verify(
+        policy="Only pending orders may be modified.",
+        history=[UserMessage(role="user", content="Change my order address.")],
+        proposed_message=proposal,
+        tools=[as_tool(inspect_order)],
+    )
+
+    assert verdict.decision == VerifierDecision.REVISE
+    assert verdict.checks_performed[0].result == "contradicted"
+    assert len(calls) == 2
+    assert calls[0]["tools"][0].name == "inspect_order"
+    assert calls[0]["tool_choice"] == "required"
+    assert calls[1]["tool_choice"] == "auto"
+    tool_result = calls[1]["messages"][-1]
+    assert tool_result.role == "tool"
+    assert '"status": "delivered"' in tool_result.content
+
+
+def test_llm_verifier_reprompts_when_required_tool_is_skipped(monkeypatch) -> None:
+    """A provider that ignores required tool choice gets one corrective retry."""
+    calls = []
+
+    def inspect_order(order_id: str) -> dict:
+        """Inspect an order.
+
+        Args:
+            order_id: The order to inspect.
+
+        Returns:
+            Current order state.
+        """
+        return {"order_id": order_id, "status": "delivered"}
+
+    def fake_generate(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            return AssistantMessage(
+                role="assistant",
+                content=(
+                    '{"decision":"revise","reason":"status unknown",'
+                    '"revision_instruction":"inspect it"}'
+                ),
+            )
+        if len(calls) == 2:
+            return AssistantMessage(
+                role="assistant",
+                tool_calls=[
+                    ToolCall(
+                        id="verify-order",
+                        name="inspect_order",
+                        arguments={"order_id": "#W123"},
+                    )
+                ],
+            )
+        return AssistantMessage(
+            role="assistant",
+            content=(
+                '{"decision":"revise","reason":"order is delivered",'
+                '"revision_instruction":"do not modify it"}'
+            ),
+        )
+
+    monkeypatch.setattr("tau2.verifier.llm_verifier.generate", fake_generate)
+    verifier = LLMVerifier("test/verifier-model", max_tool_calls=2)
+    verdict = verifier.verify(
+        policy="Only pending orders may be modified.",
+        history=[UserMessage(role="user", content="Change order #W123.")],
+        proposed_message=AssistantMessage(
+            role="assistant",
+            content="I will change the address.",
+        ),
+        tools=[as_tool(inspect_order)],
+    )
+
+    assert verdict.decision == VerifierDecision.REVISE
+    assert len(calls) == 3
+    assert any(
+        "required read-only check" in (message.content or "")
+        for message in calls[1]["messages"]
+        if isinstance(message, UserMessage)
+    )
