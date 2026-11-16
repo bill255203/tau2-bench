@@ -17,12 +17,14 @@ class Verifier(ABC):
         policy: str,
         history: list[Message],
         proposed_message: AssistantMessage,
+        trusted_event_log: list[dict] | None = None,
         tools: list[Tool] | None = None,
     ) -> VerifierVerdict:
         """Return a verdict without mutating the conversation or environment.
 
-        The verifier gets the domain policy, committed history, proposal, and
-        optionally isolated read-only tools. It must not receive the task, whose
+        The verifier gets the domain policy, committed history, an
+        orchestrator-built trusted event log, proposal, and optionally isolated
+        read-only tools. It must not receive the task, whose
         ``evaluation_criteria`` and ``user_scenario`` hold the expected actions
         and the user simulator's hidden instructions.
         """

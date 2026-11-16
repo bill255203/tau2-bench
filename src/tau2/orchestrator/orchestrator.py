@@ -42,6 +42,57 @@ from tau2.verifier.base import Verifier
 from tau2.verifier.models import VerifierDecision, VerifierRecord
 
 
+def build_trusted_event_log(history: list[Message]) -> list[dict]:
+    """Pair committed tool calls with authoritative environment results."""
+    events: list[dict] = []
+    events_by_id: dict[str, dict] = {}
+
+    for message in history:
+        if isinstance(message, (AssistantMessage, UserMessage)):
+            for tool_call in message.tool_calls or []:
+                event = {
+                    "sequence": len(events),
+                    "call_id": tool_call.id,
+                    "tool_name": tool_call.name,
+                    "arguments": tool_call.arguments,
+                    "requestor": tool_call.requestor,
+                    "result": None,
+                    "success": None,
+                    "executed_at": None,
+                }
+                events.append(event)
+                events_by_id[tool_call.id] = event
+
+        tool_messages = (
+            message.tool_messages
+            if isinstance(message, MultiToolMessage)
+            else [message]
+            if isinstance(message, ToolMessage)
+            else []
+        )
+        for tool_message in tool_messages:
+            event = events_by_id.get(tool_message.id)
+            if event is None:
+                event = {
+                    "sequence": len(events),
+                    "call_id": tool_message.id,
+                    "tool_name": None,
+                    "arguments": None,
+                    "requestor": tool_message.requestor,
+                }
+                events.append(event)
+                events_by_id[tool_message.id] = event
+            event.update(
+                {
+                    "result": tool_message.content,
+                    "success": not tool_message.error,
+                    "executed_at": tool_message.timestamp,
+                }
+            )
+
+    return events
+
+
 class Role(str, Enum):
     AGENT = "agent"
     USER = "user"
@@ -1012,6 +1063,7 @@ class Orchestrator(BaseOrchestrator[AgentT, UserT, Message]):
             policy=self.environment.get_policy(),
             history=deepcopy(self.trajectory),
             proposed_message=deepcopy(proposed_message),
+            trusted_event_log=build_trusted_event_log(self.trajectory),
             tools=verifier_tools,
         )
         self.verifier_records.append(

@@ -4,15 +4,25 @@ import json
 from typing import Optional
 
 from tau2.agent.base_agent import HalfDuplexAgent, ValidAgentInputMessage
-from tau2.data_model.message import AssistantMessage, Message, ToolCall, UserMessage
+from tau2.data_model.message import (
+    AssistantMessage,
+    Message,
+    ToolCall,
+    ToolMessage,
+    UserMessage,
+)
 from tau2.data_model.simulation import TextRunConfig
 from tau2.domains.retail_stock.environment import get_environment, get_tasks
 from tau2.environment.tool import as_tool
-from tau2.orchestrator.orchestrator import Orchestrator, Role
+from tau2.orchestrator.orchestrator import (
+    Orchestrator,
+    Role,
+    build_trusted_event_log,
+)
 from tau2.runner.build import build_text_orchestrator
 from tau2.user.user_simulator import DummyUser
 from tau2.verifier.base import Verifier
-from tau2.verifier.llm_verifier import LLMVerifier
+from tau2.verifier.llm_verifier import SYSTEM_PROMPT, LLMVerifier
 from tau2.verifier.models import VerifierDecision, VerifierVerdict
 
 
@@ -57,12 +67,14 @@ class RecordingVerifier(Verifier):
         policy: str,
         history: list[Message],
         proposed_message: AssistantMessage,
+        trusted_event_log=None,
         tools=None,
     ) -> VerifierVerdict:
         self.calls.append(
             {
                 "policy": policy,
                 "history": history,
+                "trusted_event_log": trusted_event_log,
                 "proposal": proposed_message,
                 "tools": tools,
             }
@@ -86,6 +98,7 @@ class SequencedVerifier(RecordingVerifier):
             {
                 "policy": kwargs["policy"],
                 "history": kwargs["history"],
+                "trusted_event_log": kwargs.get("trusted_event_log"),
                 "proposal": kwargs["proposed_message"],
                 "tools": kwargs.get("tools"),
             }
@@ -174,6 +187,7 @@ def test_passing_verifier_commits_retail_stock_proposal() -> None:
     assert len(verifier.calls) == 1
     assert verifier.calls[0]["policy"] == orchestrator.environment.get_policy()
     assert verifier.calls[0]["history"] == orchestrator.trajectory[:-1]
+    assert verifier.calls[0]["trusted_event_log"] == []
     assert verifier.calls[0]["proposal"].tool_calls[0].name == "get_variant_stock"
     assert [tool.name for tool in verifier.calls[0]["tools"]] == ["get_variant_stock"]
     assert orchestrator.agent_state == {"proposals": 1}
@@ -315,6 +329,72 @@ def test_llm_verifier_parses_structured_result(monkeypatch) -> None:
     assert "get_variant_stock" in verifier_payload
 
 
+def test_verifier_prompt_scopes_protocol_rules_to_current_proposal() -> None:
+    assert "per-message protocol rules only to proposed_agent_output" in SYSTEM_PROMPT
+    assert "earlier committed calls is allowed" in SYSTEM_PROMPT
+    assert "both non-empty text" in SYSTEM_PROMPT
+    assert "does not complete every remaining user goal" in SYSTEM_PROMPT
+
+
+def test_llm_verifier_separates_conversation_from_trusted_events(
+    monkeypatch,
+) -> None:
+    captured = {}
+
+    def fake_generate(**kwargs):
+        captured.update(kwargs)
+        return AssistantMessage(
+            role="assistant",
+            content='{"decision":"pass","reason":"event is authoritative"}',
+        )
+
+    monkeypatch.setattr("tau2.verifier.llm_verifier.generate", fake_generate)
+    verifier = LLMVerifier("test/verifier-model")
+    history = [
+        UserMessage(role="user", content="Check order #W123."),
+        AssistantMessage(
+            role="assistant",
+            tool_calls=[
+                ToolCall(
+                    id="order-call",
+                    name="get_order_details",
+                    arguments={"order_id": "#W123"},
+                )
+            ],
+        ),
+        ToolMessage(
+            id="order-call",
+            role="tool",
+            content='{"status":"delivered"}',
+            error=False,
+        ),
+    ]
+
+    verifier.verify(
+        policy="Delivered orders cannot be modified.",
+        history=history,
+        trusted_event_log=build_trusted_event_log(history),
+        proposed_message=AssistantMessage(role="assistant", content="It is delivered."),
+    )
+
+    payload = json.loads(captured["messages"][1].content)
+    assert payload["relevant_conversation"] == [
+        {"role": "user", "content": "Check order #W123."}
+    ]
+    assert payload["trusted_event_log"] == [
+        {
+            "sequence": 0,
+            "call_id": "order-call",
+            "tool_name": "get_order_details",
+            "arguments": {"order_id": "#W123"},
+            "requestor": "assistant",
+            "result": '{"status":"delivered"}',
+            "success": True,
+            "executed_at": history[2].timestamp,
+        }
+    ]
+
+
 def test_llm_verifier_input_excludes_hidden_task_fields(monkeypatch) -> None:
     captured_messages = []
 
@@ -340,7 +420,8 @@ def test_llm_verifier_input_excludes_hidden_task_fields(monkeypatch) -> None:
     assert len(orchestrator.verifier_records) == 1
     assert set(json.loads(captured_messages[1].content)) == {
         "policy",
-        "committed_history",
+        "relevant_conversation",
+        "trusted_event_log",
         "proposed_agent_output",
     }
     verifier_input = "\n".join(message.content for message in captured_messages)
@@ -402,7 +483,7 @@ def test_llm_verifier_uses_read_tool_before_revising(monkeypatch) -> None:
         )
 
     monkeypatch.setattr("tau2.verifier.llm_verifier.generate", fake_generate)
-    verifier = LLMVerifier("test/verifier-model", max_tool_calls=2)
+    verifier = LLMVerifier("test/verifier-model", max_tool_calls=2, min_tool_calls=1)
     proposal = AssistantMessage(
         role="assistant",
         tool_calls=[
@@ -477,7 +558,7 @@ def test_llm_verifier_reprompts_when_required_tool_is_skipped(monkeypatch) -> No
         )
 
     monkeypatch.setattr("tau2.verifier.llm_verifier.generate", fake_generate)
-    verifier = LLMVerifier("test/verifier-model", max_tool_calls=2)
+    verifier = LLMVerifier("test/verifier-model", max_tool_calls=2, min_tool_calls=1)
     verdict = verifier.verify(
         policy="Only pending orders may be modified.",
         history=[UserMessage(role="user", content="Change order #W123.")],

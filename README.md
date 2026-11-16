@@ -1,3 +1,14 @@
+# Midterm Submission: Online Post-Verifier
+
+> ## Start here: [Open the Midterm Project README](MIDTERM_README.md)
+>
+> This repository contains the complete runnable Tau-Bench project together
+> with my online post-verifier implementation. The midterm README explains the
+> files I changed, the trusted-event-log design, installation, Ollama setup,
+> experiment commands, tests, and current limitations.
+
+---
+
 # $\tau$-Bench: A Benchmark for Tool-Agent-User Interaction in Real-World Domains
 
 [![python](https://img.shields.io/badge/Python-3.12%2B-blue.svg?style=flat&logo=python&logoColor=white)](https://www.python.org)

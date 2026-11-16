@@ -20,20 +20,35 @@ from tau2.verifier.models import VerifierVerdict
 
 SYSTEM_PROMPT = """
 You are an adversarial online verifier for a customer-service agent. Inspect
-the complete committed conversation and the proposed agent output. The proposal
-has not yet been sent and no proposed tool call has executed.
+the relevant committed conversation, trusted event log, and proposed agent
+output. The proposal has not yet been sent and no proposed tool call has
+executed.
+
+Use relevant_conversation only to understand user intent, confirmations, and
+what the agent communicated. Use trusted_event_log as the authoritative record
+of tools that actually executed and the results returned by the environment.
+Do not treat claims made in the conversation as proof of system or database
+state when the trusted event log contradicts them.
 
 Try to disprove that the proposal is safe and correct. Before returning pass,
-identify the important claims and preconditions in the proposal and use the
-available read-only tools whenever current authoritative state would help check
-them. Do not pass a proposal merely because it looks plausible. If evidence is
-missing after reasonable checks, return revise with a specific instruction.
-When an available read-only tool can resolve an evidence gap, you MUST call it
-before returning an inconclusive check or asking the customer-service agent to
-perform that lookup. Do not delegate a check that you can perform yourself.
+identify the important claims and preconditions in the proposal and check the
+trusted event log first. Do not pass a proposal merely because it looks
+plausible. Read-only tools are an optional fallback: call one only when the
+trusted event log lacks evidence needed for the current proposal. If evidence
+is still missing after reasonable checks, return revise with a specific
+instruction. Do not delegate a check that you can perform yourself.
 
 You audit only the current proposal. Do not solve the whole customer task, do
 not propose a new workflow, and do not attempt any write operation.
+
+Apply per-message protocol rules only to proposed_agent_output, never to the
+number or sequence of calls in the prior history. "At most one tool call at a
+time" means the current proposal may contain zero or one tool call; any number
+of earlier committed calls is allowed. "Do not respond and call a tool at the
+same time" is violated only when the current proposal has both non-empty text
+content and a tool_calls entry. Natural-language discussion of a possible next
+tool is not itself a tool call. Do not reject a valid intermediate step merely
+because it does not complete every remaining user goal in the same turn.
 
 Return "pass" only when the proposal follows the policy, is supported by the
 conversation and tool results, and is safe to commit. Return "revise" when a
@@ -105,6 +120,17 @@ def _compact_message(message: Message) -> dict:
     return compact_message
 
 
+def _relevant_conversation(history: list[Message]) -> list[dict]:
+    """Return only conversational evidence, excluding tool calls and results."""
+    conversation = []
+    for message in history:
+        if isinstance(message, (ToolMessage, MultiToolMessage)):
+            continue
+        if message.content:
+            conversation.append({"role": message.role, "content": message.content})
+    return conversation
+
+
 class LLMVerifier(Verifier):
     """Use a bounded, read-only LLM tool loop to gate agent proposals."""
 
@@ -113,7 +139,7 @@ class LLMVerifier(Verifier):
         llm: str,
         llm_args: dict | None = None,
         max_tool_calls: int = 4,
-        min_tool_calls: int = 1,
+        min_tool_calls: int = 0,
     ):
         if max_tool_calls < 0:
             raise ValueError("max_tool_calls must be non-negative")
@@ -141,12 +167,14 @@ class LLMVerifier(Verifier):
         policy: str,
         history: list[Message],
         proposed_message: AssistantMessage,
+        trusted_event_log: list[dict] | None = None,
         tools: list[Tool] | None = None,
     ) -> VerifierVerdict:
         """Verify one proposal with bounded access to isolated read-only tools."""
         payload = {
             "policy": policy,
-            "committed_history": [_compact_message(message) for message in history],
+            "relevant_conversation": _relevant_conversation(history),
+            "trusted_event_log": trusted_event_log or [],
             "proposed_agent_output": _compact_message(proposed_message),
         }
         messages: list[Message] = [
