@@ -42,3 +42,13 @@ class VerifierRecord(BaseModel):
     proposed_message: dict
     verdict: VerifierVerdict
     revision_attempt: int = 0
+    normalization: Optional[dict] = None
+    enforcement: Optional[
+        Literal[
+            "llm_pass",
+            "non_write_bypass",
+            "read_only_bypass",
+            "fail_open_non_write",
+            "fail_closed",
+        ]
+    ] = None

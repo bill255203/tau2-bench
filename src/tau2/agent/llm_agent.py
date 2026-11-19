@@ -35,6 +35,8 @@ In each turn you can either:
 - Send a message to the user.
 - Make a tool call.
 You cannot do both at the same time.
+When making a tool call, return the tool call only: the assistant content must
+be empty. Do not add narration such as "Let me check" or "I will look it up."
 
 Try to be helpful and always follow the policy. When making a tool call, provide valid
 JSON arguments for that tool. When replying to the user, respond in natural language;
@@ -56,6 +58,8 @@ customer. Revise it using the verifier feedback below. Generate a complete
 replacement response or tool call that follows the policy and is grounded in
 the existing conversation and tool results. Do not mention the verifier,
 feedback, rejection, or an internal revision process to the customer.
+If the replacement makes a tool call, return only the tool call with empty
+assistant content. Do not explain or announce the tool call.
 
 Verifier feedback:
 {feedback}

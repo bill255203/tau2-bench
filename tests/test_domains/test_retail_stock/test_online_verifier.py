@@ -18,11 +18,18 @@ from tau2.orchestrator.orchestrator import (
     Orchestrator,
     Role,
     build_trusted_event_log,
+    normalize_tool_call_proposal,
 )
 from tau2.runner.build import build_text_orchestrator
 from tau2.user.user_simulator import DummyUser
 from tau2.verifier.base import Verifier
-from tau2.verifier.llm_verifier import SYSTEM_PROMPT, LLMVerifier
+from tau2.verifier.llm_verifier import (
+    SYSTEM_PROMPT,
+    LLMVerifier,
+    _parse_verdict,
+    _relevant_conversation,
+    _relevant_policy,
+)
 from tau2.verifier.models import VerifierDecision, VerifierVerdict
 
 
@@ -52,6 +59,27 @@ class StockLookupAgent(HalfDuplexAgent[dict]):
             ),
             state,
         )
+
+
+class MixedStockLookupAgent(StockLookupAgent):
+    """Return provider-style narration together with a tool call."""
+
+    def generate_next_message(
+        self, message: ValidAgentInputMessage, state: dict
+    ) -> tuple[AssistantMessage, dict]:
+        proposal, state = super().generate_next_message(message, state)
+        proposal.content = "Let me check the stock."
+        return proposal, state
+
+
+class TextOnlyAgent(StockLookupAgent):
+    """Return a non-mutating natural-language proposal."""
+
+    def generate_next_message(
+        self, message: ValidAgentInputMessage, state: dict
+    ) -> tuple[AssistantMessage, dict]:
+        state["proposals"] += 1
+        return AssistantMessage(role="assistant", content="The item is available."), state
 
 
 class RecordingVerifier(Verifier):
@@ -184,25 +212,60 @@ def test_passing_verifier_commits_retail_stock_proposal() -> None:
 
     orchestrator.step()
 
-    assert len(verifier.calls) == 1
-    assert verifier.calls[0]["policy"] == orchestrator.environment.get_policy()
-    assert verifier.calls[0]["history"] == orchestrator.trajectory[:-1]
-    assert verifier.calls[0]["trusted_event_log"] == []
-    assert verifier.calls[0]["proposal"].tool_calls[0].name == "get_variant_stock"
-    assert [tool.name for tool in verifier.calls[0]["tools"]] == ["get_variant_stock"]
+    assert verifier.calls == []
     assert orchestrator.agent_state == {"proposals": 1}
     assert orchestrator.trajectory[-1].tool_calls[0].name == "get_variant_stock"
     assert orchestrator.to_role == Role.ENV
     assert len(orchestrator.verifier_records) == 1
+    assert orchestrator.verifier_records[0].enforcement == "read_only_bypass"
 
     # The committed proposal routes normally and executes on the next step.
     orchestrator.step()
     assert len(orchestrator.environment.tools.db.event_log) == 1
 
 
+def test_orchestrator_normalizes_mixed_tool_call_before_verification() -> None:
+    verifier = RecordingVerifier(VerifierDecision.PASS)
+    orchestrator = _orchestrator(verifier)
+    agent = MixedStockLookupAgent(
+        tools=orchestrator.environment.get_tools(),
+        domain_policy=orchestrator.environment.get_policy(),
+    )
+    orchestrator.agent = agent
+    orchestrator.agent_state = agent.get_init_state()
+
+    orchestrator.step()
+
+    assert verifier.calls == []
+    proposal = orchestrator.verifier_records[0].proposed_message
+    assert proposal["content"] is None
+    assert proposal["tool_calls"][0]["name"] == "get_variant_stock"
+    assert orchestrator.verifier_records[0].normalization == {
+        "kind": "removed_mixed_tool_call_content",
+        "removed_content": "Let me check the stock.",
+        "tool_names": ["get_variant_stock"],
+    }
+
+
+def test_normalizer_leaves_text_only_proposal_unchanged() -> None:
+    proposal = AssistantMessage(role="assistant", content="How can I help?")
+
+    normalization = normalize_tool_call_proposal(proposal)
+
+    assert normalization is None
+    assert proposal.content == "How can I help?"
+
+
 def test_rejected_verifier_discards_retail_stock_proposal() -> None:
     verifier = RecordingVerifier(VerifierDecision.BLOCK)
     orchestrator = _orchestrator(verifier)
+    agent = RevisingStockLookupAgent(
+        tools=orchestrator.environment.get_tools(),
+        domain_policy=orchestrator.environment.get_policy(),
+    )
+    orchestrator.agent = agent
+    orchestrator.agent_state = agent.get_init_state()
+    orchestrator.verifier_max_revisions = 0
     trajectory_before = list(orchestrator.trajectory)
 
     orchestrator.step()
@@ -239,14 +302,14 @@ def test_revision_feedback_replaces_uncommitted_proposal() -> None:
 
     orchestrator.step()
 
-    assert len(verifier.calls) == 2
+    assert len(verifier.calls) == 1
     assert verifier.calls[0]["proposal"].tool_calls[0].name == "not_a_real_tool"
-    assert verifier.calls[1]["proposal"].tool_calls[0].name == "get_variant_stock"
     assert len(orchestrator.verifier_records) == 2
     assert [record.revision_attempt for record in orchestrator.verifier_records] == [
         0,
         1,
     ]
+    assert orchestrator.verifier_records[1].enforcement == "read_only_bypass"
     assert orchestrator.agent_state == {
         "proposals": 1,
         "verifier_feedback": "Use get_variant_stock with the requested IDs.",
@@ -334,6 +397,157 @@ def test_verifier_prompt_scopes_protocol_rules_to_current_proposal() -> None:
     assert "earlier committed calls is allowed" in SYSTEM_PROMPT
     assert "both non-empty text" in SYSTEM_PROMPT
     assert "does not complete every remaining user goal" in SYSTEM_PROMPT
+    assert "proposal_facts.is_mixed is true" in SYSTEM_PROMPT
+    assert "Do not require confirmation before a read-only lookup" in SYSTEM_PROMPT
+
+
+def test_llm_verifier_provides_deterministic_proposal_facts(monkeypatch) -> None:
+    captured = {}
+
+    def fake_generate(**kwargs):
+        captured.update(kwargs)
+        return AssistantMessage(
+            role="assistant",
+            content='{"decision":"pass","reason":"shape is valid"}',
+        )
+
+    monkeypatch.setattr("tau2.verifier.llm_verifier.generate", fake_generate)
+    verifier = LLMVerifier("test/verifier-model")
+    proposal = AssistantMessage(
+        role="assistant",
+        tool_calls=[
+            ToolCall(
+                id="lookup",
+                name="get_order_details",
+                arguments={"order_id": "#W123"},
+            )
+        ],
+    )
+
+    verifier.verify(policy="policy", history=[], proposed_message=proposal)
+
+    payload = json.loads(captured["messages"][1].content)
+    assert payload["proposal_facts"] == {
+        "has_text": False,
+        "tool_call_count": 1,
+        "tool_names": ["get_order_details"],
+        "is_mixed": False,
+    }
+
+
+def test_verifier_context_keeps_only_recent_conversation() -> None:
+    history = [
+        UserMessage(role="user", content=f"message-{index}") for index in range(12)
+    ]
+
+    conversation = _relevant_conversation(history)
+
+    assert len(conversation) == 8
+    assert conversation[0]["content"] == "message-4"
+    assert conversation[-1]["content"] == "message-11"
+
+
+def test_verifier_policy_keeps_only_general_and_relevant_write_section() -> None:
+    policy = """General confirmation rule.
+
+## Domain basic
+Large domain reference.
+
+## Generic action rules
+Only pending orders can be changed.
+
+## Modify pending order
+Modification rules.
+
+## Return delivered order
+Return rules.
+"""
+    proposal = AssistantMessage(
+        role="assistant",
+        tool_calls=[
+            ToolCall(
+                id="modify",
+                name="modify_pending_order_items",
+                arguments={"order_id": "#W123"},
+            )
+        ],
+    )
+
+    selected = _relevant_policy(policy, proposal)
+
+    assert "General confirmation rule" in selected
+    assert "Generic action rules" in selected
+    assert "Modify pending order" in selected
+    assert "Large domain reference" not in selected
+    assert "Return rules" not in selected
+
+
+def test_parse_verdict_repairs_local_model_json_deviations() -> None:
+    verdict = _parse_verdict(
+        """{
+          "decision": "pass",
+          "reason": "grounded",
+          "checks_performed": [
+            {"claim": "status", "result": "partially supported",},
+          ],
+        }"""
+    )
+
+    assert verdict.decision == VerifierDecision.PASS
+    assert verdict.checks_performed[0].result == "inconclusive"
+
+
+def test_parse_verdict_repairs_internally_inconsistent_rejection() -> None:
+    verdict = _parse_verdict(
+        json.dumps(
+            {
+                "decision": "revise",
+                "reason": "The proposal is valid and supported.",
+                "revision_instruction": "Try again anyway.",
+                "checks_performed": [
+                    {
+                        "claim": "The proposal is grounded.",
+                        "result": "supported",
+                        "evidence": "Trusted event log.",
+                    }
+                ],
+                "violated_rule": None,
+                "unmet_goals": [],
+            }
+        )
+    )
+
+    assert verdict.decision == VerifierDecision.PASS
+    assert verdict.revision_instruction is None
+    assert verdict.reason.startswith("Consistency repair:")
+
+
+def test_llm_verifier_reprompts_once_after_empty_response(monkeypatch) -> None:
+    calls = []
+
+    def fake_generate(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            return AssistantMessage(role="assistant", content="")
+        return AssistantMessage(
+            role="assistant",
+            content='{"decision":"pass","reason":"valid retry"}',
+        )
+
+    monkeypatch.setattr("tau2.verifier.llm_verifier.generate", fake_generate)
+    verifier = LLMVerifier("test/verifier-model")
+
+    verdict = verifier.verify(
+        policy="policy",
+        history=[],
+        proposed_message=AssistantMessage(role="assistant", content="Hello"),
+    )
+
+    assert verdict.decision == VerifierDecision.PASS
+    assert len(calls) == 2
+    reminder = calls[1]["messages"][-1]
+    assert isinstance(reminder, UserMessage)
+    assert "previous response was empty" in reminder.content
 
 
 def test_llm_verifier_separates_conversation_from_trusted_events(
@@ -374,7 +588,16 @@ def test_llm_verifier_separates_conversation_from_trusted_events(
         policy="Delivered orders cannot be modified.",
         history=history,
         trusted_event_log=build_trusted_event_log(history),
-        proposed_message=AssistantMessage(role="assistant", content="It is delivered."),
+        proposed_message=AssistantMessage(
+            role="assistant",
+            tool_calls=[
+                ToolCall(
+                    id="modify-order",
+                    name="modify_pending_order_address",
+                    arguments={"order_id": "#W123", "address1": "1 Main St"},
+                )
+            ],
+        ),
     )
 
     payload = json.loads(captured["messages"][1].content)
@@ -410,6 +633,13 @@ def test_llm_verifier_input_excludes_hidden_task_fields(monkeypatch) -> None:
 
     monkeypatch.setattr("tau2.verifier.llm_verifier.generate", fake_generate)
     orchestrator = _orchestrator(LLMVerifier("test/verifier-model", min_tool_calls=0))
+    agent = RevisingStockLookupAgent(
+        tools=orchestrator.environment.get_tools(),
+        domain_policy=orchestrator.environment.get_policy(),
+    )
+    orchestrator.agent = agent
+    orchestrator.agent_state = agent.get_init_state()
+    orchestrator.verifier_max_revisions = 0
     task = orchestrator.task
     # The task must carry hidden fields for this test to mean anything.
     assert task.evaluation_criteria is not None
@@ -423,6 +653,7 @@ def test_llm_verifier_input_excludes_hidden_task_fields(monkeypatch) -> None:
         "relevant_conversation",
         "trusted_event_log",
         "proposed_agent_output",
+        "proposal_facts",
     }
     verifier_input = "\n".join(message.content for message in captured_messages)
     assert "evaluation_criteria" not in verifier_input
@@ -430,6 +661,24 @@ def test_llm_verifier_input_excludes_hidden_task_fields(monkeypatch) -> None:
     # Values from the hidden fields must not leak under other keys either.
     assert task.id not in verifier_input
     assert task.user_scenario.instructions.task_instructions not in verifier_input
+
+
+def test_text_only_proposal_bypasses_llm_verifier_and_is_audited() -> None:
+    verifier = RecordingVerifier(VerifierDecision.BLOCK)
+    orchestrator = _orchestrator(verifier)
+    agent = TextOnlyAgent(
+        tools=orchestrator.environment.get_tools(),
+        domain_policy=orchestrator.environment.get_policy(),
+    )
+    orchestrator.agent = agent
+    orchestrator.agent_state = agent.get_init_state()
+
+    orchestrator.step()
+
+    assert not orchestrator.done
+    assert verifier.calls == []
+    assert orchestrator.trajectory[-1].content == "The item is available."
+    assert orchestrator.verifier_records[-1].enforcement == "non_write_bypass"
 
 
 def test_llm_verifier_uses_read_tool_before_revising(monkeypatch) -> None:

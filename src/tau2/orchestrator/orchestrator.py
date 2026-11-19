@@ -39,7 +39,12 @@ from tau2.user.user_simulator_base import (
 from tau2.utils.llm_utils import get_cost
 from tau2.utils.utils import format_time, get_now
 from tau2.verifier.base import Verifier
-from tau2.verifier.models import VerifierDecision, VerifierRecord
+from tau2.verifier.models import (
+    VerifierCheck,
+    VerifierDecision,
+    VerifierRecord,
+    VerifierVerdict,
+)
 
 
 def build_trusted_event_log(history: list[Message]) -> list[dict]:
@@ -91,6 +96,19 @@ def build_trusted_event_log(history: list[Message]) -> list[dict]:
             )
 
     return events
+
+
+def normalize_tool_call_proposal(message: AssistantMessage) -> Optional[dict]:
+    """Remove provider narration from a tool-call proposal and audit the change."""
+    if not message.tool_calls or not (message.content or "").strip():
+        return None
+    normalization = {
+        "kind": "removed_mixed_tool_call_content",
+        "removed_content": message.content,
+        "tool_names": [tool_call.name for tool_call in message.tool_calls],
+    }
+    message.content = None
+    return normalization
 
 
 class Role(str, Enum):
@@ -969,8 +987,13 @@ class Orchestrator(BaseOrchestrator[AgentT, UserT, Message]):
                 agent_msg, proposed_state = self.agent.generate_next_message(
                     self.message, deepcopy(state_before)
                 )
+                normalization = normalize_tool_call_proposal(agent_msg)
                 self._collect_pre_verifier_records(revision_attempt=0)
-                verdict = self._verify_proposal(agent_msg, revision_attempt=0)
+                verdict = self._verify_proposal(
+                    agent_msg,
+                    revision_attempt=0,
+                    normalization=normalization,
+                )
                 if verdict.decision == VerifierDecision.REVISE:
                     feedback = verdict.revision_instruction or verdict.reason
                     revision_method = getattr(
@@ -989,8 +1012,13 @@ class Orchestrator(BaseOrchestrator[AgentT, UserT, Message]):
                             deepcopy(state_before),
                             feedback,
                         )
+                        normalization = normalize_tool_call_proposal(agent_msg)
                         self._collect_pre_verifier_records(revision_attempt=1)
-                        verdict = self._verify_proposal(agent_msg, revision_attempt=1)
+                        verdict = self._verify_proposal(
+                            agent_msg,
+                            revision_attempt=1,
+                            normalization=normalization,
+                        )
                     else:
                         print(
                             "[verifier] revision requested, but this agent does not "
@@ -998,16 +1026,27 @@ class Orchestrator(BaseOrchestrator[AgentT, UserT, Message]):
                             flush=True,
                         )
                 if verdict.decision != VerifierDecision.PASS:
-                    print(
-                        "[verifier] proposal rejected; no message or tool call was "
-                        "committed to the official trajectory.",
-                        flush=True,
-                    )
-                    self.agent_state = state_before
-                    self.done = True
-                    self.termination_reason = TerminationReason.VERIFIER_REJECTED
-                    self.step_count += 1
-                    return
+                    if not agent_msg.tool_calls:
+                        self.verifier_records[-1].enforcement = (
+                            "fail_open_non_write"
+                        )
+                        print(
+                            "[verifier] non-write proposal allowed despite verdict; "
+                            "the disagreement remains in the audit record.",
+                            flush=True,
+                        )
+                    else:
+                        self.verifier_records[-1].enforcement = "fail_closed"
+                        print(
+                            "[verifier] proposal rejected; no message or tool call was "
+                            "committed to the official trajectory.",
+                            flush=True,
+                        )
+                        self.agent_state = state_before
+                        self.done = True
+                        self.termination_reason = TerminationReason.VERIFIER_REJECTED
+                        self.step_count += 1
+                        return
                 self.agent_state = proposed_state
             agent_msg.validate()
             if self.agent.is_stop(agent_msg):
@@ -1047,25 +1086,69 @@ class Orchestrator(BaseOrchestrator[AgentT, UserT, Message]):
         self.environment.sync_tools()
 
     def _verify_proposal(
-        self, proposed_message: AssistantMessage, *, revision_attempt: int
+        self,
+        proposed_message: AssistantMessage,
+        *,
+        revision_attempt: int,
+        normalization: Optional[dict] = None,
     ):
         """Verify and audit a proposal before it can affect state or trajectory."""
         assert self.verifier is not None
-        verifier_environment = deepcopy(self.environment)
-        verifier_tools = []
-        if verifier_environment.tools is not None:
-            verifier_tools = [
-                tool
-                for name, tool in verifier_environment.tools.get_tools().items()
-                if verifier_environment.tools.tool_type(name) == ToolType.READ
-            ]
-        verdict = self.verifier.verify(
-            policy=self.environment.get_policy(),
-            history=deepcopy(self.trajectory),
-            proposed_message=deepcopy(proposed_message),
-            trusted_event_log=build_trusted_event_log(self.trajectory),
-            tools=verifier_tools,
+        tool_calls = proposed_message.tool_calls or []
+        known_tool_types = []
+        if self.environment.tools is not None:
+            for tool_call in tool_calls:
+                if not self.environment.tools.has_tool(tool_call.name):
+                    break
+                known_tool_types.append(
+                    self.environment.tools.tool_type(tool_call.name)
+                )
+        is_read_only = bool(tool_calls) and len(known_tool_types) == len(tool_calls)
+        is_read_only = is_read_only and all(
+            tool_type == ToolType.READ for tool_type in known_tool_types
         )
+
+        if not tool_calls:
+            verdict = VerifierVerdict(
+                decision=VerifierDecision.PASS,
+                reason="Non-write proposal bypassed LLM verification.",
+                confidence=1.0,
+                checks_performed=[
+                    VerifierCheck(
+                        claim="The proposal cannot directly mutate environment state.",
+                        result="supported",
+                        evidence="The proposal contains no tool calls.",
+                    )
+                ],
+            )
+            enforcement = "non_write_bypass"
+        elif is_read_only:
+            verdict = VerifierVerdict(
+                decision=VerifierDecision.PASS,
+                reason="Read-only proposal bypassed LLM verification.",
+                confidence=1.0,
+                checks_performed=[
+                    VerifierCheck(
+                        claim="The proposal contains only known read-only tools.",
+                        result="supported",
+                        evidence="Authoritative environment tool metadata.",
+                    )
+                ],
+            )
+            enforcement = "read_only_bypass"
+        else:
+            verdict = self.verifier.verify(
+                policy=self.environment.get_policy(),
+                history=deepcopy(self.trajectory),
+                proposed_message=deepcopy(proposed_message),
+                trusted_event_log=build_trusted_event_log(self.trajectory),
+                tools=None,
+            )
+            enforcement = (
+                "llm_pass"
+                if verdict.decision == VerifierDecision.PASS
+                else "fail_closed"
+            )
         self.verifier_records.append(
             VerifierRecord(
                 proposal_index=len(self.verifier_records),
@@ -1073,6 +1156,8 @@ class Orchestrator(BaseOrchestrator[AgentT, UserT, Message]):
                 proposed_message=proposed_message.model_dump(mode="json"),
                 verdict=verdict,
                 revision_attempt=revision_attempt,
+                normalization=normalization,
+                enforcement=enforcement,
             )
         )
         print(
