@@ -1100,12 +1100,12 @@ class Orchestrator(BaseOrchestrator[AgentT, UserT, Message]):
             for tool_call in tool_calls:
                 if not self.environment.tools.has_tool(tool_call.name):
                     break
-                known_tool_types.append(
-                    self.environment.tools.tool_type(tool_call.name)
-                )
-        is_read_only = bool(tool_calls) and len(known_tool_types) == len(tool_calls)
-        is_read_only = is_read_only and all(
-            tool_type == ToolType.READ for tool_type in known_tool_types
+                known_tool_types.append(self.environment.tools.tool_type(tool_call.name))
+        has_only_non_write_tools = bool(tool_calls) and len(known_tool_types) == len(
+            tool_calls
+        )
+        has_only_non_write_tools = has_only_non_write_tools and all(
+            tool_type != ToolType.WRITE for tool_type in known_tool_types
         )
 
         if not tool_calls:
@@ -1122,20 +1122,20 @@ class Orchestrator(BaseOrchestrator[AgentT, UserT, Message]):
                 ],
             )
             enforcement = "non_write_bypass"
-        elif is_read_only:
+        elif has_only_non_write_tools:
             verdict = VerifierVerdict(
                 decision=VerifierDecision.PASS,
-                reason="Read-only proposal bypassed LLM verification.",
+                reason="Proposal with no write tools bypassed LLM verification.",
                 confidence=1.0,
                 checks_performed=[
                     VerifierCheck(
-                        claim="The proposal contains only known read-only tools.",
+                        claim="The proposal contains only known non-write tools.",
                         result="supported",
                         evidence="Authoritative environment tool metadata.",
                     )
                 ],
             )
-            enforcement = "read_only_bypass"
+            enforcement = "non_write_tool_bypass"
         else:
             verdict = self.verifier.verify(
                 policy=self.environment.get_policy(),

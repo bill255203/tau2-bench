@@ -70,7 +70,9 @@ If it is the agent's turn to respond and the agent doesn't say anything for an e
 
 ## Task Completion
 - The goal is to continue the conversation until the task is complete.
-- If the instruction goal is satisfied, generate the '###STOP###' token to end the conversation.
+- Confirming or requesting an action does not mean that action has been completed. Never include '###STOP###' in the same message where you confirm, approve, or ask the agent to perform an action.
+- When the task requires the agent to change system state, wait until the agent reports that the action was executed successfully before generating '###STOP###'.
+- Only when the instruction goal is actually satisfied, generate the '###STOP###' token to end the conversation.
 - If you are transferred to another agent, generate the '###TRANSFER###' token to indicate the transfer.
 - If you find yourself in a situation in which the scenario does not provide enough information for you to continue the conversation, generate the '###OUT-OF-SCOPE###' token to end the conversation.
 

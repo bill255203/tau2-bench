@@ -47,7 +47,7 @@ class VerifierRecord(BaseModel):
         Literal[
             "llm_pass",
             "non_write_bypass",
-            "read_only_bypass",
+            "non_write_tool_bypass",
             "fail_open_non_write",
             "fail_closed",
         ]

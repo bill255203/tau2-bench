@@ -12,6 +12,7 @@ from tau2.data_model.message import (
     UserMessage,
 )
 from tau2.data_model.simulation import TextRunConfig
+from tau2.domains.retail.environment import get_environment as get_retail_environment
 from tau2.domains.retail_stock.environment import get_environment, get_tasks
 from tau2.environment.tool import as_tool
 from tau2.orchestrator.orchestrator import (
@@ -217,7 +218,7 @@ def test_passing_verifier_commits_retail_stock_proposal() -> None:
     assert orchestrator.trajectory[-1].tool_calls[0].name == "get_variant_stock"
     assert orchestrator.to_role == Role.ENV
     assert len(orchestrator.verifier_records) == 1
-    assert orchestrator.verifier_records[0].enforcement == "read_only_bypass"
+    assert orchestrator.verifier_records[0].enforcement == "non_write_tool_bypass"
 
     # The committed proposal routes normally and executes on the next step.
     orchestrator.step()
@@ -309,7 +310,7 @@ def test_revision_feedback_replaces_uncommitted_proposal() -> None:
         0,
         1,
     ]
-    assert orchestrator.verifier_records[1].enforcement == "read_only_bypass"
+    assert orchestrator.verifier_records[1].enforcement == "non_write_tool_bypass"
     assert orchestrator.agent_state == {
         "proposals": 1,
         "verifier_feedback": "Use get_variant_stock with the requested IDs.",
@@ -320,6 +321,30 @@ def test_revision_feedback_replaces_uncommitted_proposal() -> None:
     # Only the accepted replacement can reach the environment.
     orchestrator.step()
     assert len(orchestrator.environment.tools.db.event_log) == 1
+
+
+def test_generic_calculate_tool_bypasses_llm_verifier() -> None:
+    verifier = RecordingVerifier(VerifierDecision.BLOCK)
+    orchestrator = _orchestrator(verifier)
+    orchestrator.environment = get_retail_environment()
+    proposal = AssistantMessage(
+        role="assistant",
+        tool_calls=[
+            ToolCall(
+                id="calculate-total",
+                name="calculate",
+                arguments={"expression": "1 + 2"},
+            )
+        ],
+    )
+
+    verdict = orchestrator._verify_proposal(proposal, revision_attempt=0)
+
+    assert verdict.decision == VerifierDecision.PASS
+    assert verifier.calls == []
+    assert orchestrator.verifier_records[-1].enforcement == (
+        "non_write_tool_bypass"
+    )
 
 
 def test_retail_stock_builder_enables_llm_verifier() -> None:

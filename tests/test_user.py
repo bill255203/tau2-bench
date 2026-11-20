@@ -1,7 +1,12 @@
 import pytest
 
 from tau2.data_model.message import AssistantMessage, UserMessage
-from tau2.user.user_simulator import DummyUser, UserSimulator
+from tau2.user.user_simulator import (
+    DummyUser,
+    UserSimulator,
+    get_global_user_sim_guidelines,
+    get_global_user_sim_guidelines_voice,
+)
 
 
 @pytest.fixture
@@ -64,3 +69,20 @@ def test_dummy_user_no_args():
     dummy = DummyUser()
     state = dummy.get_init_state()
     assert state.messages == []
+
+
+@pytest.mark.parametrize("use_tools", [False, True])
+def test_user_guidelines_do_not_stop_on_action_confirmation(use_tools: bool):
+    guidelines = get_global_user_sim_guidelines(use_tools=use_tools)
+
+    assert "Confirming or requesting an action does not mean" in guidelines
+    assert "Never include '###STOP###' in the same message" in guidelines
+    assert "wait until the agent reports that the action was executed" in guidelines
+
+
+@pytest.mark.parametrize("use_tools", [False, True])
+def test_voice_user_guidelines_do_not_stop_on_action_confirmation(use_tools: bool):
+    guidelines = get_global_user_sim_guidelines_voice(use_tools=use_tools)
+
+    assert "Confirming or requesting an action does not mean" in guidelines
+    assert "Never include '###STOP###' in the same message" in guidelines
