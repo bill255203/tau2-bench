@@ -1108,21 +1108,7 @@ class Orchestrator(BaseOrchestrator[AgentT, UserT, Message]):
             tool_type != ToolType.WRITE for tool_type in known_tool_types
         )
 
-        if not tool_calls:
-            verdict = VerifierVerdict(
-                decision=VerifierDecision.PASS,
-                reason="Non-write proposal bypassed LLM verification.",
-                confidence=1.0,
-                checks_performed=[
-                    VerifierCheck(
-                        claim="The proposal cannot directly mutate environment state.",
-                        result="supported",
-                        evidence="The proposal contains no tool calls.",
-                    )
-                ],
-            )
-            enforcement = "non_write_bypass"
-        elif has_only_non_write_tools:
+        if has_only_non_write_tools:
             verdict = VerifierVerdict(
                 decision=VerifierDecision.PASS,
                 reason="Proposal with no write tools bypassed LLM verification.",

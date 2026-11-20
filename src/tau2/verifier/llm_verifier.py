@@ -49,6 +49,31 @@ instruction.
 You audit only the current proposal. Do not solve the whole customer task, do
 not propose a new workflow, and do not attempt any write operation.
 
+Judge the current action independently from later confirmed actions. A valid
+single tool call MUST pass even when other user goals still require separate
+tool calls afterward. Never return revise or block merely because the proposal
+does not also perform a second action. Put remaining work in unmet_goals while
+allowing the current valid action to execute. A revision instruction must not
+tell the agent to execute the unchanged proposal first: if the current proposal
+should execute as written, the decision is pass.
+
+Treat tool-specific limits narrowly. For example, a rule saying that an order's
+items can be modified only once restricts another item modification; it does
+not prohibit a separately confirmed shipping-address modification unless the
+policy explicitly says that all modification tools share one limit.
+
+Resolve relational user references exactly. If the user asks for the same item
+as one in another order, compare the proposed item ID with the item ID returned
+for that order. Matching only descriptive attributes such as color, size, or
+capacity is insufficient when authoritative tool evidence identifies a
+specific item. Never infer that one successful tool changed an unrelated field
+or completed another action unless its returned result explicitly shows that.
+
+For a text-only proposal, check factual completion claims against the trusted
+event log. If it says all requested changes were completed while a confirmed
+write is absent, return revise and identify the missing action. Ordinary
+questions, explanations, and progress updates should pass when accurate.
+
 Apply per-message protocol rules only to proposed_agent_output, never to the
 number or sequence of calls in the prior history. "At most one tool call at a
 time" means the current proposal may contain zero or one tool call; any number
@@ -164,21 +189,21 @@ def _collect_string_evidence(value: Any) -> set[str]:
 
 
 def _relevant_events(
-    events: list[dict], proposed_message: AssistantMessage
+    events: list[dict], proposed_message: AssistantMessage, recent_events: int = 8
 ) -> list[dict]:
-    """Keep events that contain proposed identifiers plus authentication evidence."""
+    """Keep identifier matches, authentication, and recent reference evidence."""
     identifiers: set[str] = set()
     for tool_call in proposed_message.tool_calls or []:
         identifiers.update(_collect_string_evidence(tool_call.arguments))
 
-    selected = []
-    for event in events:
+    selected_indexes = set(range(max(0, len(events) - recent_events), len(events)))
+    for index, event in enumerate(events):
         serialized = json.dumps(event, default=str)
         is_authentication = (event.get("tool_name") or "").startswith("find_user_id")
         matches_proposal = any(identifier in serialized for identifier in identifiers)
         if is_authentication or matches_proposal:
-            selected.append(event)
-    return selected
+            selected_indexes.add(index)
+    return [events[index] for index in sorted(selected_indexes)]
 
 
 def _proposal_facts(proposed_message: AssistantMessage) -> dict:

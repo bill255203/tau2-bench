@@ -29,6 +29,7 @@ from tau2.verifier.llm_verifier import (
     LLMVerifier,
     _parse_verdict,
     _relevant_conversation,
+    _relevant_events,
     _relevant_policy,
 )
 from tau2.verifier.models import VerifierDecision, VerifierVerdict
@@ -424,6 +425,33 @@ def test_verifier_prompt_scopes_protocol_rules_to_current_proposal() -> None:
     assert "does not complete every remaining user goal" in SYSTEM_PROMPT
     assert "proposal_facts.is_mixed is true" in SYSTEM_PROMPT
     assert "Do not require confirmation before a read-only lookup" in SYSTEM_PROMPT
+    assert "current action independently from later confirmed actions" in SYSTEM_PROMPT
+    assert "items can be modified only once" in SYSTEM_PROMPT
+    assert "compare the proposed item ID" in SYSTEM_PROMPT
+    assert "text-only proposal" in SYSTEM_PROMPT
+
+
+def test_verifier_context_keeps_recent_events_for_relational_references() -> None:
+    events = [
+        {"tool_name": "get_order_details", "result": {"item_id": f"item-{i}"}}
+        for i in range(12)
+    ]
+    proposal = AssistantMessage(
+        role="assistant",
+        tool_calls=[
+            ToolCall(
+                id="modify",
+                name="modify_pending_order_items",
+                arguments={"new_item_ids": ["wrong-item"]},
+            )
+        ],
+    )
+
+    selected = _relevant_events(events, proposal)
+
+    assert len(selected) == 8
+    assert selected[0]["result"]["item_id"] == "item-4"
+    assert selected[-1]["result"]["item_id"] == "item-11"
 
 
 def test_llm_verifier_provides_deterministic_proposal_facts(monkeypatch) -> None:
@@ -688,8 +716,8 @@ def test_llm_verifier_input_excludes_hidden_task_fields(monkeypatch) -> None:
     assert task.user_scenario.instructions.task_instructions not in verifier_input
 
 
-def test_text_only_proposal_bypasses_llm_verifier_and_is_audited() -> None:
-    verifier = RecordingVerifier(VerifierDecision.BLOCK)
+def test_text_only_proposal_is_verified_and_audited() -> None:
+    verifier = RecordingVerifier(VerifierDecision.PASS)
     orchestrator = _orchestrator(verifier)
     agent = TextOnlyAgent(
         tools=orchestrator.environment.get_tools(),
@@ -701,9 +729,9 @@ def test_text_only_proposal_bypasses_llm_verifier_and_is_audited() -> None:
     orchestrator.step()
 
     assert not orchestrator.done
-    assert verifier.calls == []
+    assert len(verifier.calls) == 1
     assert orchestrator.trajectory[-1].content == "The item is available."
-    assert orchestrator.verifier_records[-1].enforcement == "non_write_bypass"
+    assert orchestrator.verifier_records[-1].enforcement == "llm_pass"
 
 
 def test_llm_verifier_uses_read_tool_before_revising(monkeypatch) -> None:
